@@ -1,0 +1,17 @@
+{
+  "name": "infracredit-service-desk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "InfraCredit Service Desk: ticketing on Netlify with SharePoint Lists and Outlook email",
+  "scripts": {
+    "build": "node scripts/copy-msal.mjs",
+    "setup": "node --env-file=.env scripts/setup-sharepoint.mjs",
+    "dev": "npm run build && netlify dev"
+  },
+  "engines": { "node": ">=20.6" },
+  "dependencies": {
+    "@azure/msal-browser": "3.30.0",
+    "jose": "5.10.0"
+  }
+}

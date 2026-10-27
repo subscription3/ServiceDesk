@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>InfraCredit Service Desk</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230B2D5B'/><text x='50' y='68' font-size='56' text-anchor='middle' fill='%2376B82A'>✦</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="root"><div class="loading">Loading the service desk…</div></div>
+
+<dialog id="dlgNew" aria-labelledby="newTitle">
+  <form method="dialog" id="newForm" novalidate>
+    <div class="dlg-h"><h2 id="newTitle">New ticket</h2><button type="button" data-close aria-label="Close">×</button></div>
+    <div class="dlg-b">
+      <p class="err" id="newErr" hidden></p>
+      <div class="cols">
+        <div class="field full"><label for="nSubject">Subject <span class="req">*</span></label><input id="nSubject" maxlength="250"></div>
+        <div class="field"><label for="nName">Requester name <span class="req">*</span></label><input id="nName" maxlength="120"></div>
+        <div class="field"><label for="nEmail">Requester email</label><input id="nEmail" type="email" maxlength="160"><small>Updates are emailed here.</small></div>
+        <div class="field"><label for="nPhone">Phone</label><input id="nPhone" type="tel" maxlength="40"></div>
+        <div class="field"><label for="nChannel">Channel</label><select id="nChannel"></select></div>
+        <div class="field"><label for="nPriority">Priority</label><select id="nPriority"></select></div>
+        <div class="field"><label for="nDept">Department</label><select id="nDept"></select></div>
+        <div class="field"><label for="nAssignee">Assign to</label><select id="nAssignee"></select></div>
+        <div class="field"><label for="nTags">Tags</label><input id="nTags" placeholder="e.g. login, refund" maxlength="200"></div>
+        <div class="field full"><label for="nDesc">Description <span class="req">*</span></label><textarea id="nDesc" rows="5"></textarea></div>
+      </div>
+    </div>
+    <div class="dlg-f"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="nSubmit">Create ticket</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgSettings" aria-labelledby="setTitle">
+  <div class="dlg-h"><h2 id="setTitle">Settings</h2><button type="button" data-close aria-label="Close">×</button></div>
+  <div class="dlg-b">
+    <div class="field"><label for="agentName">Agents who can be assigned tickets</label>
+      <div class="chips" id="agentChips"></div>
+      <div class="addrow"><input id="agentName" placeholder="Name" maxlength="80"><input id="agentEmail" type="email" placeholder="Work email" maxlength="160"><button class="btn" id="agentAdd" type="button">Add</button></div>
+      <small>Who can open the agent desk is controlled by the “Service Desk Agent” role in Microsoft Entra.</small>
+    </div>
+    <div class="field"><label for="deptIn">Departments</label>
+      <div class="chips" id="deptChips"></div>
+      <div class="addrow"><input id="deptIn" placeholder="Department name" maxlength="80"><button class="btn" id="deptAdd" type="button">Add</button></div>
+    </div>
+    <div class="field"><label>Response targets (hours)</label><div class="cols" id="slaFields"></div></div>
+    <div class="field"><label>Email</label><small id="mailInfo"></small>
+      <div style="margin-top:8px"><button class="btn" id="mailCheck" type="button">Check mailbox now</button></div></div>
+  </div>
+  <div class="dlg-f"><button type="button" class="btn primary" data-close>Done</button></div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/vendor/msal-browser.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
