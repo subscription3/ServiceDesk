@@ -13,6 +13,8 @@ const S = {
   cmode: "reply", dtab: "conversation", drafts: {}, sending: false,
   my: [], myEvents: [], myDetails: {}, ptab: "new", psel: null, pconfirm: null, bellOpen: false,
   pform: {}, preply: {}, perr: "", psending: false, seen: loadSeen(),
+  stab: "users", uq: "", dir: [], dirAvailable: null, unew: { name: "", email: "", role: "Agent" }, slaDraft: null, uploading: false, mailChecking: false,
+  logoOk: false, navOpen: false, searchOpen: false, userMenu: false,
 };
 let pca = null, account = null;
 
@@ -24,7 +26,7 @@ function loadSeen() { try { return JSON.parse(lsGet("sd-seen") || "{}"); } catch
 function saveSeen() { lsSet("sd-seen", JSON.stringify(S.seen)); }
 function sk(s) { return "s-" + String(s).replace(/\s+/g, "-").replace(/^./, c => c.toUpperCase()); }
 function opt(list, sel, blank) { return (blank != null ? `<option value="">${esc(blank)}</option>` : "") + list.map(x => `<option${x === sel ? " selected" : ""}>${esc(x)}</option>`).join(""); }
-function agentOpts(sel, blank) { return (blank != null ? `<option value="">${esc(blank)}</option>` : "") + S.settings.agents.map(a => `<option value="${esc(a.email)}"${a.email === sel ? " selected" : ""}>${esc(a.name)}</option>`).join(""); }
+function agentOpts(sel, blank) { return (blank != null ? `<option value="">${esc(blank)}</option>` : "") + (S.settings.users || []).map(a => `<option value="${esc(a.email)}"${a.email === sel ? " selected" : ""}>${esc(a.name)}</option>`).join(""); }
 let toastT;
 function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), 3500); }
 function dur(ms) { const m = Math.round(Math.abs(ms) / 60000); if (m < 60) return m + "m"; const h = Math.round(m / 60); if (h < 48) return h + "h"; return Math.round(h / 24) + "d"; }
@@ -38,7 +40,7 @@ function slaInfo(t) {
   const span = Math.max(1, t.dueAt - t.createdAt), left = t.dueAt - Date.now();
   const pct = Math.max(0, Math.min(100, (left / span) * 100));
   if (left < 0) return { cls: "late", txt: "Overdue by " + dur(left), pct: 100 };
-  return { cls: pct < 25 ? "warn" : "", txt: "Due in " + dur(left), pct };
+  return { cls: pct < ((S.settings.sla && S.settings.sla.warnAt) || 25) ? "warn" : "", txt: "Due in " + dur(left), pct };
 }
 function isOverdue(t) { return t.status !== "Closed" && t.status !== "On hold" && t.dueAt && t.dueAt < Date.now(); }
 function contactKey(t) { return (t.requesterEmail || t.requesterName || "").trim().toLowerCase(); }
@@ -132,23 +134,66 @@ async function requesterReply(id) {
 function unreadFor(id) { const seen = S.seen[id] || 0; return S.myEvents.filter(e => e.ticketId === id && e.at > seen).length; }
 function markSeen(ids) { const now = Date.now(); ids.forEach(id => { S.seen[id] = now; }); saveSeen(); }
 
+/* ---------- icons (simple line icons) ---------- */
+const ICONS = {
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  dash: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  inbox: '<path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 5h14l2 8v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5.5 6.5-5.5s5.5 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c1.8.8 3 2.6 3.5 5.2"/>',
+  unassigned: '<circle cx="12" cy="8" r="4" stroke-dasharray="3 2.5"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  pause: '<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
+  up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  bell: '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.9-3.5L4 9M4 4v5h5M4 13a8 8 0 0 0 14.9 3.5L20 15M20 20v-5h-5"/>',
+};
+function ico(n, cls) { return `<svg class="ico${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ""}</svg>`; }
+function initials(name) { const p = String(name || "?").trim().split(/[\s@.]+/).filter(Boolean); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+function logoSrc() { return (S.settings && S.settings.logoUrl) || (S.cfg && S.cfg.logoUrl) || (S.logoOk ? "/brand/logo.png" : ""); }
+function logoHTML(product) {
+  const org = (S.cfg && S.cfg.orgName) || "InfraCredit";
+  const src = logoSrc();
+  const mark = src ? `<img src="${esc(src)}" alt="${esc(org)}">` : `<span class="wordmark">${esc(org)}</span>`;
+  return mark + (product === false ? "" : `<span class="product">Service Desk</span>`);
+}
+function badge(status) { return `<span class="badge ${sk(status)}">${esc(status)}</span>`; }
+function prio(p) { return `<span class="prio p-${esc(p)}"><i></i>${esc(p)}</span>`; }
+function slaCell(t) {
+  const s = slaInfo(t);
+  const cls = s.done || s.paused ? "idle" : s.cls;
+  return `<div class="sla ${cls}"><div class="sla-txt">${esc(s.txt)}</div>${s.done || s.paused ? "" : `<div class="sla-bar" aria-hidden="true"><i style="width:${Math.max(4, s.pct)}%"></i></div>`}</div>`;
+}
+
 /* ---------- views ---------- */
 const VIEWS = [
-  ["open", "Open tickets", t => t.status !== "Closed"],
-  ["mine", "My tickets", t => t.assigneeEmail === S.user.email && t.status !== "Closed"],
-  ["unassigned", "Unassigned", t => !t.assigneeEmail && t.status !== "Closed"],
-  ["fromportal", "From portal", t => t.channel === "Self-service portal" && t.status !== "Closed"],
-  ["fromemail", "From email", t => t.channel === "Email" && t.status !== "Closed"],
-  ["overdue", "Overdue", isOverdue],
-  ["onhold", "On hold", t => t.status === "On hold"],
-  ["escalated", "Escalated", t => t.status === "Escalated"],
-  ["closed", "Closed", t => t.status === "Closed"],
-  ["all", "All tickets", () => true],
+  ["open", "Open tickets", "inbox", t => t.status !== "Closed"],
+  ["mine", "Assigned to me", "user", t => t.assigneeEmail === S.user.email && t.status !== "Closed"],
+  ["unassigned", "Unassigned", "unassigned", t => !t.assigneeEmail && t.status !== "Closed"],
+  ["overdue", "Overdue", "clock", isOverdue],
+  ["escalated", "Escalated", "up", t => t.status === "Escalated"],
+  ["onhold", "On hold", "pause", t => t.status === "On hold"],
+  ["fromportal", "From portal", "globe", t => t.channel === "Self-service portal" && t.status !== "Closed"],
+  ["fromemail", "From email", "mail", t => t.channel === "Email" && t.status !== "Closed"],
+  ["closed", "Closed", "check", t => t.status === "Closed"],
+  ["all", "All tickets", "list", () => true],
 ];
 const PR = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
 function visible() {
   const v = VIEWS.find(v => v[0] === S.view) || VIEWS[0];
-  let list = S.tickets.filter(v[2]);
+  const q0 = S.search.trim();
+  let list = q0 ? S.tickets.slice() : S.tickets.filter(v[3]);
   if (S.contact) list = list.filter(t => contactKey(t) === S.contact);
   const q = S.search.trim().toLowerCase().replace(/^#/, "");
   if (q) list = list.filter(t => [t.number, t.subject, t.requesterName, t.requesterEmail, t.assigneeName, t.description, t.tags.join(" ")].join(" ").toLowerCase().includes(q));
@@ -162,121 +207,170 @@ function render() {
   if (!S.user) return;
   const active = document.activeElement; const keepId = active && active.id; let selStart = null;
   try { selStart = active && active.selectionStart; } catch (e) { }
-  if (!S.user.isAgent) {
-    root.innerHTML = `<div class="portal"><header class="p-top"><div class="brand"><div class="brand-mark" aria-hidden="true">✦</div><span>${esc(S.cfg.orgName)} Service Desk</span></div>
-      <button class="linkbtn" data-act="signout">Sign out</button></header><main class="p-wrap">${renderPortal(false)}</main></div>`;
-  } else {
-    const counts = Object.fromEntries(VIEWS.map(v => [v[0], S.tickets.filter(v[2]).length]));
-    const tp = S.page === "tickets";
-    const sel = tp && S.selected && S.tickets.find(t => t.id === S.selected);
-    root.innerHTML = `<div class="app ${tp ? "" : "wide-main"} ${sel ? "has-sel" : ""}">
-      <nav class="rail" aria-label="Service desk">
-        <div class="brand"><div class="brand-mark" aria-hidden="true">✦</div><span>Service Desk</span></div>
-        <button class="new-btn" data-act="new">+ New ticket</button>
-        <button class="nav" data-page="dashboard" aria-current="${S.page === "dashboard"}"><span>Dashboard</span></button>
-        <h2>Tickets</h2>
-        ${VIEWS.map(v => `<button class="nav" data-view="${v[0]}" aria-current="${tp && S.view === v[0]}"><span>${v[1]}</span><span class="n ${v[0] === "overdue" && counts.overdue ? "hot" : ""}">${counts[v[0]]}</span></button>`).join("")}
-        <h2>Directory</h2>
-        <button class="nav" data-page="contacts" aria-current="${S.page === "contacts"}"><span>Requesters</span></button>
-        <button class="nav" data-page="portal" aria-current="${S.page === "portal"}"><span>Request portal</span></button>
-        <button class="nav" data-act="settings"><span>Settings</span></button>
-        <div class="rail-foot">
-          <div class="user-chip">Signed in as <b>${esc(S.user.name)}</b><br>${esc(S.user.email)}</div>
-          <button class="linkbtn" data-act="signout">Sign out</button>
-        </div>
-      </nav>
-      ${!S.loaded ? `<div class="spinner">Loading tickets…</div>` : tp ? renderList() + renderDetail(sel) : S.page === "dashboard" ? renderDash(counts) : S.page === "portal" ? `<main class="page">${renderPortal(true)}</main>` : renderContacts()}
-    </div>`;
-  }
+  root.innerHTML = S.user.isAgent ? renderDesk() : renderPortalPage();
   if (keepId) { const el = document.getElementById(keepId); if (el) { el.focus(); try { if (selStart != null) el.setSelectionRange(selStart, selStart); } catch (e) { } } }
-  const th = document.querySelector(".thread"); if (th && S._scrollThread) { th.scrollTop = th.scrollHeight; S._scrollThread = false; }
+  if (S._scrollThread) { const th = document.querySelector(".thread"); if (th) th.lastElementChild?.scrollIntoView({ block: "nearest" }); S._scrollThread = false; }
+}
+function userMenu() {
+  return `<div class="usermenu">
+    <button class="userbtn" data-act="usermenu" aria-expanded="${S.userMenu}" aria-haspopup="true"><span class="avatar">${esc(initials(S.user.name))}</span><span class="who"><b>${esc(S.user.name)}</b><span>${S.user.isAdmin ? "Service desk admin" : S.user.isAgent ? "Service desk agent" : "Staff"}</span></span></button>
+    ${S.userMenu ? `<div class="dropdown" role="menu"><div class="dd-head"><b>${esc(S.user.name)}</b>${esc(S.user.email)}</div>
+      ${S.user.isAdmin ? `<button role="menuitem" data-act="settings">${ico("gear")}Settings</button>` : ""}
+      <button role="menuitem" data-act="signout">${ico("logout")}Sign out</button></div>` : ""}
+  </div>`;
+}
+function renderDesk() {
+  const counts = Object.fromEntries(VIEWS.map(v => [v[0], S.tickets.filter(v[3]).length]));
+  const navItem = (attr, val, label, icon, count, hot) => `<button class="nav" ${attr}="${val}" aria-current="${(attr === "data-view" ? S.page === "tickets" && S.view === val : S.page === val)}">${ico(icon)}<span class="label">${label}</span>${count != null ? `<span class="count ${hot ? "hot" : ""}">${count}</span>` : ""}</button>`;
+  let content;
+  if (!S.loaded) content = `<div class="spinner">Loading tickets…</div>`;
+  else if (S.page === "tickets") { const t = S.selected && S.tickets.find(x => x.id === S.selected); content = t ? renderDetail(t) : renderList(counts); }
+  else if (S.page === "dashboard") content = renderDash(counts);
+  else if (S.page === "portal") content = `<div class="page in-desk">${renderPortalBody(true)}</div>`;
+  else if (S.page === "settings") content = renderSettingsPage();
+  else content = renderContacts();
+  return `<div class="shell">
+    <header class="topbar">
+      <button class="menu-btn" data-act="menu" aria-label="Open navigation" aria-expanded="${S.navOpen}">${ico("menu")}</button>
+      <button class="logo" data-page="dashboard" aria-label="Service desk home">${logoHTML()}</button>
+      <div class="gsearch ${S.searchOpen ? "open" : ""}" role="search">${ico("search")}<label class="sr" for="q">Search tickets</label><input id="q" type="search" placeholder="Search tickets by number, subject or requester" value="${esc(S.search)}" autocomplete="off"></div>
+      <div class="top-actions">
+        <button class="search-toggle" data-act="searchtoggle" aria-label="Search">${ico("search")}</button>
+        <button class="btn primary" data-act="new">${ico("plus")}<span class="txt">New ticket</span></button>
+        ${userMenu()}
+      </div>
+    </header>
+    <nav class="sidenav ${S.navOpen ? "open" : ""}" aria-label="Main">
+      <h2>Overview</h2>
+      ${navItem("data-page", "dashboard", "Dashboard", "dash")}
+      <h2>Tickets</h2>
+      ${VIEWS.map(v => navItem("data-view", v[0], v[1], v[2], counts[v[0]], v[0] === "overdue" && counts.overdue > 0)).join("")}
+      <h2>Directory</h2>
+      ${navItem("data-page", "contacts", "Requesters", "users")}
+      ${navItem("data-page", "portal", "Request portal", "globe")}
+      ${S.user.isAdmin ? `<h2>Administration</h2>${navItem("data-page", "settings", "Settings", "gear")}` : ""}
+      <div class="side-foot">Requests arrive from the portal and ${esc(S.cfg.supportEmail)}.</div>
+    </nav>
+    <main class="main" id="main">${content}</main>
+  </div>`;
 }
 
 function renderList() {
   const list = visible(); const v = VIEWS.find(v => v[0] === S.view) || VIEWS[0];
   const cName = S.contact && (S.tickets.find(t => contactKey(t) === S.contact) || {}).requesterName;
-  return `<section class="listpane" aria-label="Ticket list">
-    <div class="list-head"><h1>${esc(v[1])}</h1>
-      <div class="search"><label class="sr" for="q">Search tickets</label><input id="q" type="search" placeholder="Search by #, subject, requester…" value="${esc(S.search)}">
-      <label class="sr" for="sortSel">Sort</label><select id="sortSel">${[["newest", "Newest"], ["oldest", "Oldest"], ["due", "Due soonest"], ["priority", "Priority"], ["updated", "Recently updated"]].map(o => `<option value="${o[0]}"${S.sort === o[0] ? " selected" : ""}>${o[1]}</option>`).join("")}</select></div>
-      ${S.contact ? `<div class="chipline">Requester: <button data-act="clear-contact">${esc(cName || S.contact)} ×</button></div>` : ""}
+  const allChecked = list.length && list.every(t => S.checked.has(t.id));
+  return `<div class="page">
+    <div class="page-head">
+      <div><h1>${S.search.trim() ? "Search results" : esc(v[1])}</h1><p>${list.length} ${list.length === 1 ? "ticket" : "tickets"}${S.search.trim() ? ` matching “${esc(S.search.trim())}” across all tickets` : ""}</p></div>
+      <div class="toolbar">
+        ${S.contact ? `<button class="filterchip" data-act="clear-contact" aria-label="Remove requester filter">${esc(cName || S.contact)} ×</button>` : ""}
+        <label class="sr" for="sortSel">Sort by</label>
+        <select id="sortSel">${[["newest", "Newest first"], ["oldest", "Oldest first"], ["due", "Due soonest"], ["priority", "Priority"], ["updated", "Recently updated"]].map(o => `<option value="${o[0]}"${S.sort === o[0] ? " selected" : ""}>${o[1]}</option>`).join("")}</select>
+      </div>
     </div>
-    ${S.checked.size ? `<div class="bulk"><b>${S.checked.size} selected</b>
+    ${S.checked.size ? `<div class="bulkbar"><b>${S.checked.size} selected</b>
       <label class="sr" for="bAssign">Assign selected</label><select id="bAssign"><option value="__">Assign to…</option>${agentOpts(null, "Unassigned")}</select>
-      <label class="sr" for="bStatus">Set status</label><select id="bStatus"><option value="">Set status…</option>${opt(STATUSES)}</select>
-      <button data-act="bulk-clear">Clear</button></div>` : ""}
-    <div class="tlist" role="listbox" aria-label="Tickets">
-      ${list.length ? list.map(rowHTML).join("") : `<div class="empty">${S.tickets.length ? `<h3>Nothing here</h3><p>No tickets match this view${S.search ? " and search" : ""}.</p>` : `<h3>No tickets yet</h3><p>Tickets arrive from the portal and the support mailbox, or you can log one yourself.</p><button class="btn primary" data-act="new">Create a ticket</button>`}</div>`}
-    </div></section>`;
-}
-function rowHTML(t) {
-  const s = slaInfo(t);
-  return `<div class="trow" role="option" tabindex="0" data-open="${t.id}" aria-selected="${S.selected === t.id}">
-    <input type="checkbox" data-check="${t.id}" ${S.checked.has(t.id) ? "checked" : ""} aria-label="Select ticket #${t.number}">
-    <div style="min-width:0">
-      <div class="t-top"><span class="t-num">#${t.number} · ${esc(t.requesterName || t.requesterEmail)} · ${esc(t.channel)}</span><span>${ago(t.updatedAt)}</span></div>
-      <div class="t-subj">${esc(t.subject)}</div>
-      <div class="t-meta"><span class="pill ${sk(t.status)}">${esc(t.status)}</span><span><i class="p-dot p-${esc(t.priority)}"></i>${esc(t.priority)}</span><span>${t.assigneeName ? esc(t.assigneeName) : "Unassigned"}</span><span class="sla-txt ${s.cls}">${esc(s.txt)}</span></div>
-      ${s.done || s.paused ? "" : `<div class="sla ${s.cls}" aria-hidden="true"><i style="width:${s.pct}%"></i></div>`}
+      <label class="sr" for="bStatus">Set status</label><select id="bStatus"><option value="">Change status…</option>${opt(STATUSES)}</select>
+      <button class="btn sm ghost" data-act="bulk-clear">Clear selection</button></div>` : ""}
+    <div class="card table-card">
+      ${list.length ? `<table class="tickets">
+        <thead><tr>
+          <th style="width:36px"><input type="checkbox" data-checkall aria-label="Select all" ${allChecked ? "checked" : ""}></th>
+          <th>Ticket</th><th>Subject</th><th class="hide-md">Requester</th><th>Status</th><th class="hide-sm">Priority</th><th class="hide-lg">Assignee</th><th class="hide-sm">Resolution due</th><th class="hide-lg">Updated</th>
+        </tr></thead>
+        <tbody>${list.map(rowHTML).join("")}</tbody></table>`
+      : `<div class="empty">${S.tickets.length ? `<h3>No tickets here</h3><p>Nothing matches this view${S.search ? " and search" : ""}. Try another view or clear the search.</p>` : `<h3>No tickets yet</h3><p>Tickets arrive from the request portal and ${esc(S.cfg.supportEmail)}. You can also log one yourself.</p><button class="btn primary" data-act="new">${ico("plus")}New ticket</button>`}</div>`}
     </div></div>`;
 }
+function rowHTML(t) {
+  return `<tr data-open="${t.id}" tabindex="0">
+    <td><input type="checkbox" data-check="${t.id}" ${S.checked.has(t.id) ? "checked" : ""} aria-label="Select ticket ${t.number}"></td>
+    <td class="c-num">#${t.number}</td>
+    <td class="c-subj"><b>${esc(t.subject)}</b><span>${esc(t.department)}, via ${esc(t.channel)}</span></td>
+    <td class="hide-md"><div class="c-who"><span class="avatar req-av">${esc(initials(t.requesterName || t.requesterEmail))}</span><span>${esc(t.requesterName || t.requesterEmail)}</span></div></td>
+    <td>${badge(t.status)}</td>
+    <td class="hide-sm">${prio(t.priority)}</td>
+    <td class="hide-lg">${t.assigneeName ? `<div class="c-who"><span class="avatar">${esc(initials(t.assigneeName))}</span><span>${esc(t.assigneeName)}</span></div>` : `<span class="unassigned">Unassigned</span>`}</td>
+    <td class="hide-sm">${slaCell(t)}</td>
+    <td class="hide-lg c-muted">${ago(t.updatedAt)}</td>
+  </tr>`;
+}
+
 function renderDetail(t) {
-  if (!t) return `<section class="detail"><div class="empty"><h3>Pick a ticket</h3><p>Select a ticket from the list to read the conversation and reply.</p></div></section>`;
   const d = S.details[t.id]; const s = slaInfo(t); const cm = S.cmode; const dis = S.sending ? "disabled" : "";
-  const msgs = d ? d.messages : [];
-  const thread = [{ id: "desc", type: "customer", author: t.requesterName || t.requesterEmail, body: t.description, at: t.createdAt }, ...msgs];
-  return `<section class="detail" aria-label="Ticket #${t.number}">
-    <div class="conv">
-      <div class="d-head">
-        <button class="back" data-act="back">‹ Back to tickets</button>
-        <div class="d-crumb"><span>#${t.number}</span><span class="pill ${sk(t.status)}">${esc(t.status)}</span><span><i class="p-dot p-${esc(t.priority)}"></i>${esc(t.priority)}</span><span>via ${esc(t.channel)}</span></div>
-        <h2>${esc(t.subject)}</h2>
-        <div class="d-who"><b>${esc(t.requesterName)}</b>${t.requesterEmail ? " · " + esc(t.requesterEmail) : ""} · opened ${fmt(t.createdAt)}</div>
+  const thread = [{ id: "desc", type: "customer", author: t.requesterName || t.requesterEmail, body: t.description, at: t.createdAt, source: "" }, ...((d && d.messages) || [])];
+  const me = (S.settings.users || []).find(a => a.email === S.user.email);
+  const msgHTML = m => {
+    const kind = m.type === "reply" ? "agent" : m.type === "note" ? "note" : "customer";
+    const verb = m.id === "desc" ? "raised this ticket" : m.type === "note" ? "added an internal note" : "replied";
+    const via = m.source === "email" ? "by email" : m.source === "portal" ? "in the portal" : "";
+    return `<article class="msg ${kind}"><span class="avatar lg ${kind === "customer" ? "req-av" : kind === "note" ? "note-av" : ""}">${esc(initials(m.author))}</span>
+      <div class="msg-card"><div class="msg-h"><span><b>${esc(m.author)}</b> ${verb} ${via}${m.type === "note" ? `<span class="tag">Internal</span>` : ""}</span><time datetime="${new Date(m.at).toISOString()}">${fmt(m.at)}</time></div>
+      <div class="msg-b">${esc(m.body)}</div></div></article>`;
+  };
+  return `<div class="page">
+    <nav class="crumbs" aria-label="Breadcrumb"><button data-act="back">${esc((VIEWS.find(v => v[0] === S.view) || VIEWS[0])[1])}</button><span aria-hidden="true">/</span><span>#${t.number}</span></nav>
+    <div class="detail-head">
+      <div>
+        <div class="dh-meta"><b>#${t.number}</b><span>Opened ${fmt(t.createdAt)}</span><span>via ${esc(t.channel)}</span></div>
+        <h1>${esc(t.subject)}</h1>
+        <div class="dh-badges">${badge(t.status)}${prio(t.priority)}${slaCell(t)}</div>
+      </div>
+      <div class="dh-actions">
+        ${me && t.assigneeEmail !== me.email && t.status !== "Closed" ? `<button class="btn" data-act="assign-me">${ico("user")}Assign to me</button>` : ""}
+        ${t.status === "Closed" ? `<button class="btn" data-act="reopen">${ico("refresh")}Reopen</button>` : `<button class="btn success" data-act="close">${ico("check")}Close ticket</button>`}
+      </div>
+    </div>
+    <div class="detail-grid">
+      <section class="card conv" aria-label="Conversation">
         <div class="tabs" role="tablist">
           <button role="tab" data-tab="conversation" aria-selected="${S.dtab === "conversation"}">Conversation (${thread.length})</button>
           <button role="tab" data-tab="activity" aria-selected="${S.dtab === "activity"}">Activity</button>
         </div>
-      </div>
-      ${!d ? `<div class="thread"><p class="spinner">Loading conversation…</p></div>` : S.dtab === "conversation" ? `<div class="thread">${thread.map(m => `<article class="msg ${m.type === "reply" ? "agent" : m.type === "note" ? "note" : ""}">
-          <div class="msg-h"><span><b>${esc(m.author)}</b> ${m.type === "note" ? "added a private note" : m.id === "desc" ? "opened the ticket" : "replied"}${m.source === "email" ? " by email" : m.source === "portal" ? " in the portal" : ""}</span><time>${fmt(m.at)}</time></div>
-          <div class="msg-b">${esc(m.body)}</div></article>`).join("")}</div>
-        <div class="composer ${cm === "note" ? "note" : ""}">
-          <div class="c-modes" role="group" aria-label="Message type">
-            <button data-cmode="reply" aria-pressed="${cm === "reply"}">Reply</button>
-            <button data-cmode="note" aria-pressed="${cm === "note"}">Private note</button>
-          </div>
-          <label class="sr" for="cBody">Message</label>
-          <textarea id="cBody" placeholder="${cm === "reply" ? (t.requesterEmail ? "Your reply is emailed to " + esc(t.requesterEmail) + "…" : "This requester has no email address, so the reply is only saved on the ticket…") : "Only your team will see this note…"}">${esc(S.drafts[t.id] || "")}</textarea>
-          <div class="c-actions">
-            ${cm === "reply" ? `<button class="btn" data-send="close" ${dis}>Send and close</button><button class="btn primary" data-send="reply" ${dis}>${S.sending ? "Sending…" : "Send reply"}</button>` : `<button class="btn primary" data-send="note" ${dis}>Add note</button>`}
-          </div>
-        </div>`
-      : `<div class="thread"><ul class="log">${[...d.events].reverse().map(h => `<li><time>${fmt(h.at)}</time><span>${esc(h.text)} <span style="color:var(--muted)">· ${esc(h.by)}${h.public ? " · shown to requester" : ""}</span></span></li>`).join("")}</ul></div>`}
-    </div>
-    <aside class="props" aria-label="Ticket properties">
-      ${t.requesterEmail ? `<div class="portal-flag">The requester is emailed when you reply or change the status.</div>` : ""}
-      <div class="due-box ${s.cls}"><div class="big">${esc(s.txt)}</div><small>${t.status === "Closed" ? "Closed " + fmt(t.closedAt) : t.dueAt ? "Target " + fmt(t.dueAt) : ""}</small>
-        ${t.firstResponseAt ? `<small>First response after ${dur(t.firstResponseAt - t.createdAt)}</small>` : t.status !== "Closed" ? "<small>Awaiting first response</small>" : ""}</div>
-      <h3>Properties</h3>
-      <div class="field"><label for="pStatus">Status</label><select id="pStatus" data-field="status">${opt(STATUSES, t.status)}</select></div>
-      <div class="field"><label for="pPriority">Priority</label><select id="pPriority" data-field="priority">${opt(PRIORITIES, t.priority)}</select></div>
-      <div class="field"><label for="pAssignee">Assignee</label><select id="pAssignee" data-field="assigneeEmail">${agentOpts(t.assigneeEmail, "Unassigned")}${t.assigneeEmail && !S.settings.agents.some(a => a.email === t.assigneeEmail) ? `<option value="${esc(t.assigneeEmail)}" selected>${esc(t.assigneeName)}</option>` : ""}</select></div>
-      <div class="field"><label for="pDept">Department</label><select id="pDept" data-field="department">${opt(t.department && !S.settings.departments.includes(t.department) ? [...S.settings.departments, t.department] : S.settings.departments, t.department)}</select></div>
-      <div class="field"><label for="pChannel">Channel</label><select id="pChannel" data-field="channel">${opt(ALL_CHANNELS, t.channel)}</select></div>
-      <div class="field"><label for="pDue">Due by</label><input id="pDue" type="datetime-local" data-field="dueAt" value="${toLocalInput(t.dueAt)}"></div>
-      <div class="field"><label for="pTags">Tags</label><input id="pTags" data-field="tags" value="${esc(t.tags.join(", "))}" placeholder="Comma separated"></div>
-      <div class="contact-card"><h3>Requester</h3>
-        <div><b>${esc(t.requesterName)}</b></div>
-        ${t.requesterEmail ? `<div><a href="mailto:${esc(t.requesterEmail)}">${esc(t.requesterEmail)}</a></div>` : ""}
-        ${t.requesterPhone ? `<div>${esc(t.requesterPhone)}</div>` : ""}
-        <div style="margin-top:6px"><button class="btn" data-contact="${esc(contactKey(t))}">All tickets from this requester (${S.tickets.filter(x => contactKey(x) === contactKey(t)).length})</button></div>
-      </div>
-      <div style="margin-top:18px"><button class="btn danger" data-act="delete">Delete ticket</button></div>
-    </aside></section>`;
+        ${!d ? `<div class="spinner">Loading conversation…</div>` : S.dtab === "conversation" ? `<div class="thread">${thread.map(msgHTML).join("")}</div>
+          <div class="composer ${cm === "note" ? "note" : ""}">
+            <div class="seg" role="group" aria-label="Message type"><button data-cmode="reply" aria-pressed="${cm === "reply"}">Reply to requester</button><button data-cmode="note" aria-pressed="${cm === "note"}">Internal note</button></div>
+            <label class="sr" for="cBody">Message</label>
+            <textarea id="cBody" placeholder="${cm === "reply" ? "Write your reply…" : "Write a note for the team…"}">${esc(S.drafts[t.id] || "")}</textarea>
+            <div class="c-hint">${cm === "reply" ? (t.requesterEmail ? `Your reply is emailed to ${esc(t.requesterEmail)} and shown in their portal.` : "This requester has no email address, so the reply is only saved on the ticket.") : "Internal notes are only visible to agents."}</div>
+            <div class="c-actions">${cm === "reply" ? `<button class="btn" data-send="close" ${dis}>Send and close</button><button class="btn primary" data-send="reply" ${dis}>${S.sending ? "Sending…" : "Send reply"}</button>` : `<button class="btn primary" data-send="note" ${dis}>Add note</button>`}</div>
+          </div>`
+        : `<ul class="log">${[...d.events].reverse().map(h => `<li><time>${fmt(h.at)}</time><span>${esc(h.text)} <span class="by">by ${esc(h.by)}</span>${h.public ? `<span class="pub">Sent to requester</span>` : ""}</span></li>`).join("")}</ul>`}
+      </section>
+      <aside class="card props" aria-label="Ticket properties">
+        <div class="sla-box ${s.cls}"><div class="big">${esc(s.txt)}</div>
+          <small>${t.status === "Closed" ? "Closed " + fmt(t.closedAt) : t.dueAt ? "Resolution due " + fmt(t.dueAt) : ""}</small>
+          <small>${frText(t)}</small>
+          ${s.done || s.paused ? "" : `<div class="sla-bar"><i style="width:${Math.max(4, s.pct)}%"></i></div>`}</div>
+        <section><h3>Properties</h3>
+          <div class="field"><label for="pStatus">Status</label><select id="pStatus" data-field="status">${opt(STATUSES, t.status)}</select></div>
+          <div class="field"><label for="pPriority">Priority</label><select id="pPriority" data-field="priority">${opt(PRIORITIES, t.priority)}</select></div>
+          <div class="field"><label for="pAssignee">Assignee</label><select id="pAssignee" data-field="assigneeEmail">${agentOpts(t.assigneeEmail, "Unassigned")}${t.assigneeEmail && !(S.settings.users || []).some(a => a.email === t.assigneeEmail) ? `<option value="${esc(t.assigneeEmail)}" selected>${esc(t.assigneeName)}</option>` : ""}</select></div>
+          <div class="field"><label for="pDept">Department</label><select id="pDept" data-field="department">${opt(t.department && !S.settings.departments.includes(t.department) ? [...S.settings.departments, t.department] : S.settings.departments, t.department)}</select></div>
+          <div class="field"><label for="pChannel">Channel</label><select id="pChannel" data-field="channel">${opt(ALL_CHANNELS, t.channel)}</select></div>
+          <div class="field"><label for="pDue">Resolution due</label><input id="pDue" type="datetime-local" data-field="dueAt" value="${toLocalInput(t.dueAt)}"></div>
+          <div class="field"><label for="pTags">Tags</label><input id="pTags" data-field="tags" value="${esc(t.tags.join(", "))}" placeholder="Separate with commas"></div>
+        </section>
+        <section><h3>Requester</h3>
+          <div class="c-who" style="margin-bottom:10px;max-width:none"><span class="avatar lg req-av">${esc(initials(t.requesterName || t.requesterEmail))}</span><b>${esc(t.requesterName)}</b></div>
+          <dl class="kv">${t.requesterEmail ? `<dt>Email</dt><dd><a href="mailto:${esc(t.requesterEmail)}">${esc(t.requesterEmail)}</a></dd>` : ""}${t.requesterPhone ? `<dt>Phone</dt><dd>${esc(t.requesterPhone)}</dd>` : ""}<dt>Tickets</dt><dd><button class="btn sm" data-contact="${esc(contactKey(t))}">View all ${S.tickets.filter(x => contactKey(x) === contactKey(t)).length}</button></dd></dl>
+          ${t.requesterEmail ? `<div class="notice" style="margin:14px 0 0">${ico("mail")}<span>The requester is emailed when you reply or change the status.</span></div>` : ""}
+        </section>
+        <section><button class="btn danger sm" data-act="delete">Delete ticket</button></section>
+      </aside>
+    </div></div>`;
+}
+
+function frText(t) {
+  if (t.firstResponseAt) { const ok = !t.firstResponseDueAt || t.firstResponseAt <= t.firstResponseDueAt; return `First response after ${dur(t.firstResponseAt - t.createdAt)}, ${ok ? "within target" : "missed target"}`; }
+  if (t.status === "Closed") return "";
+  if (!t.firstResponseDueAt) return "Awaiting first response";
+  const left = t.firstResponseDueAt - Date.now();
+  return left < 0 ? `First response overdue by ${dur(left)}` : `First response due in ${dur(left)}`;
 }
 function bars(map) {
   const e = Object.entries(map).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
-  if (!e.length) return `<p style="color:var(--muted);margin:0">No tickets yet.</p>`;
+  if (!e.length) return `<p class="c-muted" style="margin:0">No tickets yet.</p>`;
   const max = Math.max(...e.map(x => x[1]));
   return e.map(([k, v]) => `<div class="bar"><span title="${esc(k)}">${esc(k)}</span><span class="track"><i style="width:${(v / max) * 100}%"></i></span><b>${v}</b></div>`).join("");
 }
@@ -286,103 +380,127 @@ function renderDash(counts) {
   const dueSoon = open.filter(t => t.status !== "On hold" && t.dueAt >= now && t.dueAt < now + 864e5).length;
   const resp = S.tickets.filter(t => t.firstResponseAt).map(t => t.firstResponseAt - t.createdAt);
   const avg = resp.length ? dur(resp.reduce((a, b) => a + b, 0) / resp.length) : "—";
+  const closedAll = S.tickets.filter(t => t.status === "Closed" && t.closedAt && t.dueAt);
+  const met = closedAll.length ? Math.round(100 * closedAll.filter(t => t.closedAt <= t.dueAt).length / closedAll.length) + "%" : "—";
+  const fr = S.tickets.filter(t => t.firstResponseAt && t.firstResponseDueAt);
+  const frMet = fr.length ? Math.round(100 * fr.filter(t => t.firstResponseAt <= t.firstResponseDueAt).length / fr.length) + "%" : "—";
   const bs = {}, ba = {}, bc = {}, bp = {};
   open.forEach(t => { bs[t.status] = (bs[t.status] || 0) + 1; ba[t.assigneeName || "Unassigned"] = (ba[t.assigneeName || "Unassigned"] || 0) + 1; bp[t.priority] = (bp[t.priority] || 0) + 1; });
   S.tickets.forEach(t => { bc[t.channel] = (bc[t.channel] || 0) + 1; });
-  return `<main class="page"><h1>Dashboard</h1><p class="sub">How the queue looks right now.</p>
+  const hour = new Date().getHours();
+  return `<div class="page">
+    <div class="page-head"><div><h1>Good ${hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening"}, ${esc(S.user.name.split(" ")[0])}</h1><p>Here’s how the service desk looks right now.</p></div></div>
     <div class="kpis">
-      <button class="kpi" data-view="open"><div class="v">${counts.open}</div><div class="l">Open tickets</div></button>
-      <button class="kpi ${counts.overdue ? "late" : ""}" data-view="overdue"><div class="v">${counts.overdue}</div><div class="l">Overdue</div></button>
-      <button class="kpi" data-view="open" data-sort="due"><div class="v">${dueSoon}</div><div class="l">Due in the next 24h</div></button>
-      <button class="kpi" data-view="unassigned"><div class="v">${counts.unassigned}</div><div class="l">Unassigned</div></button>
-      <button class="kpi" data-view="fromportal"><div class="v">${counts.fromportal}</div><div class="l">Open from portal</div></button>
-      <button class="kpi" data-view="fromemail"><div class="v">${counts.fromemail}</div><div class="l">Open from email</div></button>
-      <button class="kpi" data-view="closed"><div class="v">${closedWeek}</div><div class="l">Closed this week</div></button>
-      <div class="kpi"><div class="v">${avg}</div><div class="l">Avg first response</div></div>
+      <button class="kpi" data-view="open"><div class="l">Open tickets</div><div class="v">${counts.open}</div></button>
+      <button class="kpi ${counts.overdue ? "alert" : ""}" data-view="overdue"><div class="l">Overdue</div><div class="v">${counts.overdue}</div></button>
+      <button class="kpi" data-view="open" data-sort="due"><div class="l">Due in the next 24 hours</div><div class="v">${dueSoon}</div></button>
+      <button class="kpi" data-view="unassigned"><div class="l">Unassigned</div><div class="v">${counts.unassigned}</div></button>
+      <button class="kpi" data-view="mine"><div class="l">Assigned to me</div><div class="v">${counts.mine}</div></button>
+      <button class="kpi" data-view="closed"><div class="l">Closed this week</div><div class="v">${closedWeek}</div></button>
+      <div class="kpi"><div class="l">First response within target</div><div class="v">${frMet}</div></div>
+      <div class="kpi"><div class="l">Resolved within target</div><div class="v">${met}</div></div>
     </div>
     <div class="grid2">
-      <section class="panel"><h2>Open tickets by status</h2>${bars(bs)}</section>
-      <section class="panel"><h2>Open tickets by agent</h2>${bars(ba)}</section>
-      <section class="panel"><h2>Open tickets by priority</h2>${bars(bp)}</section>
-      <section class="panel"><h2>All tickets by channel</h2>${bars(bc)}</section>
-    </div></main>`;
+      <section class="card panel"><h2>Open tickets by status</h2>${bars(bs)}</section>
+      <section class="card panel"><h2>Open tickets by agent</h2>${bars(ba)}</section>
+      <section class="card panel"><h2>Open tickets by priority</h2>${bars(bp)}</section>
+      <section class="card panel"><h2>All tickets by channel</h2>${bars(bc)}</section>
+    </div></div>`;
 }
 function renderContacts() {
   const m = new Map();
   S.tickets.forEach(t => { const k = contactKey(t); if (!k) return; const c = m.get(k) || { k, name: t.requesterName, email: t.requesterEmail, phone: t.requesterPhone, total: 0, open: 0, last: 0 }; c.total++; if (t.status !== "Closed") c.open++; if (t.createdAt > c.last) { c.last = t.createdAt; c.name = t.requesterName || c.name; c.phone = t.requesterPhone || c.phone; } m.set(k, c); });
   const q = S.search.trim().toLowerCase();
   const list = [...m.values()].filter(c => !q || (c.name + " " + c.email).toLowerCase().includes(q)).sort((a, b) => b.last - a.last);
-  return `<main class="page"><h1>Requesters</h1><p class="sub">Everyone who has raised a ticket. Select someone to see their tickets.</p>
-    <div class="search" style="max-width:420px;margin-bottom:16px"><label class="sr" for="q">Search requesters</label><input id="q" type="search" placeholder="Search requesters…" value="${esc(S.search)}"></div>
-    ${list.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Open</th><th>Total</th><th>Last ticket</th></tr></thead><tbody>
-    ${list.map(c => `<tr data-contact="${esc(c.k)}" tabindex="0"><td><b>${esc(c.name)}</b></td><td>${esc(c.email || "—")}</td><td>${esc(c.phone || "—")}</td><td>${c.open}</td><td>${c.total}</td><td>${ago(c.last)}</td></tr>`).join("")}
-    </tbody></table></div>` : `<div class="empty"><h3>No requesters yet</h3><p>People appear here once they have a ticket.</p></div>`}</main>`;
+  return `<div class="page"><div class="page-head"><div><h1>Requesters</h1><p>Everyone who has raised a ticket. Select a person to see their tickets.</p></div></div>
+    <div class="card table-card">${list.length ? `<table class="dtable"><thead><tr><th>Name</th><th>Email</th><th class="hide-md">Phone</th><th>Open</th><th>Total</th><th class="hide-sm">Last ticket</th></tr></thead><tbody>
+    ${list.map(c => `<tr data-contact="${esc(c.k)}" tabindex="0"><td><div class="c-who"><span class="avatar req-av">${esc(initials(c.name || c.email))}</span><b>${esc(c.name)}</b></div></td><td>${esc(c.email || "—")}</td><td class="hide-md">${esc(c.phone || "—")}</td><td>${c.open}</td><td>${c.total}</td><td class="hide-sm c-muted">${ago(c.last)}</td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty"><h3>No requesters yet</h3><p>People appear here once they’ve raised a ticket.</p></div>`}</div></div>`;
 }
 
 /* ---------- portal ---------- */
-function renderPortal(preview) {
+function renderPortalPage() {
+  const total = S.my.reduce((n, t) => n + unreadFor(t.id), 0);
+  return `<div class="portal">
+    <header class="topbar">
+      <button class="logo" data-ptab="new" aria-label="Service desk home">${logoHTML()}</button>
+      <nav class="portal-nav" aria-label="Portal">
+        <button data-ptab="new" aria-current="${S.ptab === "new"}">${ico("plus")}<span class="txt"> New request</span></button>
+        <button data-ptab="mine" aria-current="${S.ptab === "mine"}">${ico("list")}<span class="txt"> My requests</span></button>
+        <button class="bell" data-act="bell" aria-label="Updates${total ? `, ${total} unread` : ""}" aria-expanded="${S.bellOpen}">${ico("bell")}${total ? `<span class="count">${total}</span>` : ""}</button>
+        ${userMenu()}
+      </nav>
+    </header>
+    <section class="hero"><div class="hero-inner"><h1>How can we help, ${esc(S.user.name.split(" ")[0])}?</h1><p>Raise a request with the support team and follow it from start to finish. We’ll email you at ${esc(S.user.email)} each time there’s an update.</p></div></section>
+    <div class="p-wrap">${renderPortalBody(false)}</div>
+    <footer class="portal-foot"><div><span>© ${new Date().getFullYear()} ${esc(S.cfg.orgName)}</span><span>Need help another way? Email <a href="mailto:${esc(S.cfg.supportEmail)}">${esc(S.cfg.supportEmail)}</a></span></div></footer>
+  </div>`;
+}
+function renderPortalBody(inDesk) {
   const items = S.my; const total = items.reduce((n, t) => n + unreadFor(t.id), 0);
-  const bell = `<button class="bell" data-act="bell" aria-expanded="${S.bellOpen}">Updates${total ? `<span class="badge">${total}</span>` : ""}</button>`;
   let panel = "";
-  if (S.bellOpen) {
+  if (S.bellOpen || (inDesk && total)) {
     const byId = Object.fromEntries(items.map(t => [t.id, t]));
-    const evs = S.myEvents.filter(e => byId[e.ticketId]).slice(0, 30);
-    panel = `<section class="bellpanel" aria-label="Updates"><div class="bellpanel-h"><span>Updates on your requests</span>${total ? `<button data-act="seen-all">Mark all as read</button>` : ""}</div>
-      ${evs.length ? evs.map(e => `<button class="notif ${e.at > (S.seen[e.ticketId] || 0) ? "unread" : ""}" data-popen="${e.ticketId}">${esc(e.text)}<small>${esc(byId[e.ticketId].subject)} · ${ago(e.at)}</small></button>`).join("") : `<p style="padding:12px 14px;margin:0;color:var(--muted)">No updates yet.</p>`}</section>`;
+    const evs = S.myEvents.filter(e => byId[e.ticketId]).slice(0, 20);
+    if (S.bellOpen) panel = `<section class="card bellpanel" aria-label="Updates"><div class="bellpanel-h"><span>Updates on your requests</span>${total ? `<button data-act="seen-all">Mark all as read</button>` : ""}</div>
+      ${evs.length ? evs.map(e => `<button class="notif ${e.at > (S.seen[e.ticketId] || 0) ? "unread" : ""}" data-popen="${e.ticketId}">${esc(e.text)}<small>${esc(byId[e.ticketId].subject)}, ${ago(e.at)}</small></button>`).join("") : `<p style="padding:14px 16px;margin:0" class="c-muted">No updates yet.</p>`}</section>`;
   }
   let body;
   if (S.ptab === "mine") body = S.psel ? portalDetail(S.psel) : portalList(items);
   else body = S.pconfirm ? portalConfirm(items.find(t => t.id === S.pconfirm) || (S.myDetails[S.pconfirm] && S.myDetails[S.pconfirm].ticket)) : portalForm();
-  return `${preview ? `<div class="preview-note">This is the page staff see when they sign in without the Service Desk Agent role. Requests you raise here are real tickets.</div>` : ""}
-    <div class="p-head"><div><h1>How can we help?</h1><p class="sub">Raise a request and track it here. We’ll email ${esc(S.user.email)} whenever an agent replies or the status changes. You can also email ${esc(S.cfg.supportEmail)} directly.</p></div>${bell}</div>
-    ${panel}
-    <div class="p-tabs" role="tablist"><button role="tab" data-ptab="new" aria-selected="${S.ptab === "new"}">New request</button><button role="tab" data-ptab="mine" aria-selected="${S.ptab === "mine"}">My requests (${items.length})</button></div>
-    ${body}`;
+  const open = items.filter(t => t.status !== "Closed").length;
+  return `${inDesk ? `<div class="page-head"><div><h1>Request portal</h1><p>This is what staff see when they sign in without the agent role.</p></div></div><div class="preview-note">${ico("info")}<span>Requests you raise here are real tickets, logged under your own name.</span></div>` : ""}
+    <div class="actions3">
+      <button class="action" data-ptab="new" aria-current="${S.ptab === "new" && !S.psel}"><span class="ai">${ico("edit")}</span><span><b>Raise a request</b><span>Report a problem or ask for something you need</span></span></button>
+      <button class="action" data-ptab="mine" aria-current="${S.ptab === "mine"}"><span class="ai">${ico("list")}</span><span><b>My requests</b><span>${items.length ? `${open} open, ${items.length} in total` : "Track progress and reply to the team"}</span></span></button>
+      <a class="action" href="mailto:${esc(S.cfg.supportEmail)}"><span class="ai">${ico("mail")}</span><span><b>Email the service desk</b><span>${esc(S.cfg.supportEmail)}</span></span></a>
+    </div>
+    ${panel}${body}`;
 }
 function pv(k) { return esc(S.pform[k] || ""); }
 function portalForm() {
   const pr = S.pform.priority || "Medium", dep = S.pform.department || S.settings.departments[0];
-  return `<form class="card" id="portalForm" novalidate>
-    ${S.perr ? `<p class="err">${esc(S.perr)}</p>` : ""}
+  return `<form class="card section-card" id="portalForm" novalidate>
+    <h2>Raise a request</h2><p>Give us as much detail as you can so we can help quickly.</p>
+    ${S.perr ? `<p class="err" role="alert">${esc(S.perr)}</p>` : ""}
     <div class="cols">
-      <div class="field"><label for="pf-name">Your name</label><input id="pf-name" data-pf="name" value="${esc(S.pform.name ?? S.user.name)}" maxlength="120"></div>
-      <div class="field"><label for="pf-phone">Phone</label><input id="pf-phone" data-pf="phone" type="tel" value="${pv("phone")}" maxlength="40"></div>
+      <div class="field full"><label for="pf-subject">Subject <span class="req">*</span></label><input id="pf-subject" data-pf="subject" value="${pv("subject")}" maxlength="200" placeholder="For example: Can’t connect to the office VPN"></div>
       <div class="field"><label for="pf-dept">Which team should handle it?</label><select id="pf-dept" data-pf="department">${opt(S.settings.departments, dep)}</select></div>
-      <div class="field"><label for="pf-pri">How urgent is it?</label><select id="pf-pri" data-pf="priority">${[["Low", "Low — whenever you can"], ["Medium", "Medium — affects my work"], ["High", "High — blocking my work"], ["Urgent", "Urgent — affects many people"]].map(o => `<option value="${o[0]}"${pr === o[0] ? " selected" : ""}>${o[1]}</option>`).join("")}</select></div>
-      <div class="field full"><label for="pf-subject">Subject <span class="req">*</span></label><input id="pf-subject" data-pf="subject" value="${pv("subject")}" maxlength="200" placeholder="e.g. Can’t connect to the office VPN"></div>
+      <div class="field"><label for="pf-pri">How urgent is it?</label><select id="pf-pri" data-pf="priority">${[["Low", "Low, whenever you can"], ["Medium", "Medium, it affects my work"], ["High", "High, it’s blocking my work"], ["Urgent", "Urgent, it affects many people"]].map(o => `<option value="${o[0]}"${pr === o[0] ? " selected" : ""}>${o[1]}</option>`).join("")}</select></div>
       <div class="field full"><label for="pf-desc">Describe the issue <span class="req">*</span></label><textarea id="pf-desc" data-pf="description" rows="6" placeholder="What happened, when it started and anything you’ve already tried">${pv("description")}</textarea></div>
+      <div class="field"><label for="pf-name">Your name</label><input id="pf-name" data-pf="name" value="${esc(S.pform.name ?? S.user.name)}" maxlength="120" autocomplete="name"></div>
+      <div class="field"><label for="pf-phone">Phone (optional)</label><input id="pf-phone" data-pf="phone" type="tel" value="${pv("phone")}" maxlength="40" autocomplete="tel"></div>
     </div>
-    <div class="c-actions"><button type="submit" class="btn primary" ${S.psending ? "disabled" : ""}>${S.psending ? "Sending…" : "Send request"}</button></div></form>`;
+    <div class="c-actions"><button type="submit" class="btn primary" ${S.psending ? "disabled" : ""}>${S.psending ? "Sending…" : "Submit request"}</button></div></form>`;
 }
 function portalConfirm(t) {
   if (!t) return portalForm();
-  return `<section class="card confirm" aria-live="polite"><h2>Request received</h2>
-    <p style="margin:0">Your ticket has been created:</p><div class="ref">Ticket #${t.number}</div>
-    <p style="margin:0 0 14px;color:var(--muted)">We’ve emailed a confirmation to ${esc(S.user.email)}. You’ll get an email every time an agent replies or the status changes.</p>
-    <div class="c-actions" style="justify-content:flex-start"><button class="btn primary" data-popen="${t.id}">Track this request</button><button class="btn" data-act="pnew">Raise another request</button></div></section>`;
+  return `<section class="card confirm" aria-live="polite"><div class="okmark">${ico("check")}</div><h2>Request received</h2>
+    <div class="ref">Ticket #${t.number}</div>
+    <p>We’ve sent a confirmation to ${esc(S.user.email)}. You’ll get an email whenever an agent replies or the status changes.</p>
+    <div class="c-actions" style="justify-content:center;margin-top:20px"><button class="btn primary" data-popen="${t.id}">Track this request</button><button class="btn" data-act="pnew">Raise another request</button></div></section>`;
 }
 function portalList(items) {
-  if (!items.length) return `<div class="empty"><h3>No requests yet</h3><p>When you raise a request, by email or here, you can follow its progress on this page.</p><button class="btn primary" data-ptab="new">Raise a request</button></div>`;
-  return `<div class="req-list">${items.map(t => { const u = unreadFor(t.id); return `<button class="req" data-popen="${t.id}">
-    <span class="r-sub">${u ? `<i class="dot" aria-label="${u} new updates"></i>` : ""}${esc(t.subject)}</span><span class="pill ${sk(t.status)}">${esc(t.status)}</span>
-    <span class="r-meta">Ticket #${t.number} · ${esc(t.department)} · raised ${ago(t.createdAt)} · updated ${ago(t.updatedAt)}</span></button>`; }).join("")}</div>`;
+  if (!items.length) return `<div class="card empty"><h3>No requests yet</h3><p>Requests you raise here or by email will appear in this list.</p><button class="btn primary" data-ptab="new">Raise a request</button></div>`;
+  return `<div class="card req-list">${items.map(t => { const u = unreadFor(t.id); return `<button class="req" data-popen="${t.id}">
+    <b>${u ? `<i class="newdot" aria-label="${u} new updates"></i>` : ""}${esc(t.subject)}</b>${badge(t.status)}
+    <span class="r-meta"><span>Ticket #${t.number}</span><span>${esc(t.department)}</span><span>Raised ${ago(t.createdAt)}</span><span>Updated ${ago(t.updatedAt)}</span></span></button>`; }).join("")}</div>`;
 }
 function portalDetail(id) {
   const d = S.myDetails[id]; const t = (d && d.ticket) || S.my.find(x => x.id === id);
-  if (!t) return `<p class="spinner">Loading…</p>`;
+  if (!t) return `<div class="spinner">Loading…</div>`;
   const st = t.status; const idx = st === "Open" ? 1 : st === "Closed" ? 3 : 2;
-  const steps = ["Received", "Open", idx === 2 ? st : "In progress", "Resolved"];
+  const steps = ["Submitted", "Logged", idx === 2 ? st : "In progress", "Resolved"];
   const msgs = [{ id: "d", type: "customer", author: "You", body: t.description, at: t.createdAt }, ...((d && d.messages) || [])];
-  return `<article class="p-detail">
-    <button class="btn" data-act="pback">‹ All my requests</button>
-    <div class="d-crumb" style="margin-top:16px"><span>Ticket #${t.number}</span><span class="pill ${sk(st)}">${esc(st)}</span><span>${esc(t.department)}</span></div>
-    <h2>${esc(t.subject)}</h2><div class="d-who">Raised ${fmt(t.createdAt)} via ${esc(t.channel)}</div>
-    <div class="tracker" aria-label="Progress">${steps.map((s, i) => `<div class="step ${i <= idx ? "done" : ""} ${i === idx ? "cur" : ""}">${esc(s)}</div>`).join("")}</div>
-    <section class="p-section"><h3>Conversation</h3><div class="p-thread">
-      ${!d ? `<p class="spinner">Loading conversation…</p>` : msgs.map(m => { const mine = m.type === "customer"; return `<article class="msg ${mine ? "" : "agent"}" style="${mine ? "" : "align-self:stretch"}"><div class="msg-h"><b>${esc(mine ? (m.author === "You" ? "You" : m.author) : m.author + " (Support)")}</b><time>${fmt(m.at)}</time></div><div class="msg-b">${esc(m.body)}</div></article>`; }).join("")}
+  return `<article class="card section-card">
+    <nav class="crumbs" aria-label="Breadcrumb"><button data-act="pback">My requests</button><span aria-hidden="true">/</span><span>Ticket #${t.number}</span></nav>
+    <div class="detail-head" style="margin-bottom:0"><div><h1 style="margin-top:0">${esc(t.subject)}</h1><div class="dh-meta"><span>Ticket #${t.number}</span><span>Raised ${fmt(t.createdAt)}</span><span>${esc(t.department)}</span></div></div>${badge(st)}</div>
+    <div class="tracker" aria-label="Progress: ${esc(steps[idx])}">${steps.map((s, i) => `<div class="step ${i <= idx ? "done" : ""} ${i === idx ? "cur" : ""}">${esc(s)}</div>`).join("")}</div>
+    <section class="p-section"><h3>Conversation</h3><div class="thread" style="padding:0">
+      ${!d ? `<div class="spinner">Loading conversation…</div>` : msgs.map(m => { const mine = m.type === "customer"; const who = mine ? (m.author === "You" || m.author === S.user.name ? "You" : m.author) : m.author; return `<article class="msg ${mine ? "customer" : "agent"}"><span class="avatar lg ${mine ? "req-av" : ""}">${esc(initials(mine ? S.user.name : m.author))}</span><div class="msg-card"><div class="msg-h"><span><b>${esc(who)}</b>${mine ? "" : `<span class="tag">Service desk</span>`}</span><time>${fmt(m.at)}</time></div><div class="msg-b">${esc(m.body)}</div></div></article>`; }).join("")}
     </div>
-    <div class="composer" style="border:1px solid var(--line);border-radius:10px;margin-top:14px">
-      <label for="pr-${id}" style="display:block;font-size:13px;color:var(--muted);margin-bottom:6px">${st === "Closed" ? "Still having the problem? Reply and we’ll reopen your ticket." : "Add more information for the support team"}</label>
+    <div class="composer" style="border:1px solid var(--line);border-radius:var(--radius-l);margin-top:16px">
+      <label class="flabel" for="pr-${id}">${st === "Closed" ? "Still having the problem? Reply and we’ll reopen your ticket." : "Add more information for the service desk"}</label>
       <textarea id="pr-${id}" data-preply="${id}">${esc(S.preply[id] || "")}</textarea>
       <div class="c-actions"><button class="btn primary" data-act="preply" data-id="${id}">Send reply</button></div>
     </div></section>
@@ -392,21 +510,31 @@ function portalDetail(id) {
 
 /* ---------- events ---------- */
 root.addEventListener("click", async e => {
-  const el = e.target.closest("[data-act],[data-view],[data-page],[data-open],[data-tab],[data-cmode],[data-send],[data-contact],[data-check],[data-ptab],[data-popen]");
+  const el = e.target.closest("[data-act],[data-view],[data-page],[data-open],[data-tab],[data-cmode],[data-send],[data-contact],[data-check],[data-checkall],[data-ptab],[data-popen]");
+  const closing = S.userMenu && !(el && el.dataset.act === "usermenu");
+  if (closing) { S.userMenu = false; if (!el) { render(); return; } }
   if (!el) return;
+  if (el.dataset.checkall != null) { e.stopPropagation(); const ids = visible().map(t => t.id); if (el.checked) ids.forEach(id => S.checked.add(id)); else S.checked.clear(); render(); return; }
+  if (el.dataset.view || el.dataset.page || el.dataset.contact != null) S.navOpen = false;
   if (el.dataset.check != null) { e.stopPropagation(); const id = Number(el.dataset.check); el.checked ? S.checked.add(id) : S.checked.delete(id); render(); return; }
-  if (el.dataset.ptab) { S.ptab = el.dataset.ptab; S.psel = null; S.pconfirm = null; render(); return; }
+  if (el.dataset.ptab) { S.ptab = el.dataset.ptab; S.psel = null; S.pconfirm = null; S.bellOpen = false; render(); return; }
   if (el.dataset.popen) { const id = Number(el.dataset.popen); S.ptab = "mine"; S.psel = id; S.pconfirm = null; S.bellOpen = false; markSeen([id]); render(); window.scrollTo(0, 0); loadMyDetail(id); return; }
-  if (el.dataset.view) { S.page = "tickets"; S.view = el.dataset.view; if (el.dataset.sort) S.sort = el.dataset.sort; S.contact = null; S.checked.clear(); S.selected = null; S.search = ""; render(); return; }
-  if (el.dataset.page) { S.page = el.dataset.page; S.search = ""; S.selected = null; render(); if (S.page === "portal") loadMine().then(render).catch(() => { }); return; }
-  if (el.dataset.open) { S.selected = Number(el.dataset.open); S.dtab = "conversation"; S._scrollThread = true; render(); loadDetail(S.selected).then(() => { S._scrollThread = true; render(); }); return; }
+  if (el.dataset.view) { S.page = "tickets"; S.view = el.dataset.view; S.search = ""; if (el.dataset.sort) S.sort = el.dataset.sort; S.contact = null; S.checked.clear(); S.selected = null; S.search = ""; render(); return; }
+  if (el.dataset.page) { S.page = el.dataset.page; S.selected = null; render(); document.getElementById("main")?.scrollTo(0, 0); if (S.page === "portal") loadMine().then(render).catch(() => { }); return; }
+  if (el.dataset.open) { if (e.target.closest("input")) return; S.selected = Number(el.dataset.open); S.dtab = "conversation"; render(); document.getElementById("main")?.scrollTo(0, 0); loadDetail(S.selected); return; }
   if (el.dataset.tab) { S.dtab = el.dataset.tab; S._scrollThread = true; render(); return; }
   if (el.dataset.cmode) { S.cmode = el.dataset.cmode; render(); document.getElementById("cBody")?.focus(); return; }
   if (el.dataset.contact != null) { S.page = "tickets"; S.view = "all"; S.contact = el.dataset.contact; S.search = ""; S.selected = null; render(); return; }
   if (el.dataset.send) { await sendMessage(el.dataset.send === "close" ? "reply" : el.dataset.send, el.dataset.send === "close"); return; }
   const a = el.dataset.act;
+  if (a === "usermenu") { S.userMenu = !S.userMenu; render(); return; }
+  if (a === "menu") { S.navOpen = !S.navOpen; render(); return; }
+  if (a === "searchtoggle") { S.searchOpen = !S.searchOpen; render(); if (S.searchOpen) document.getElementById("q")?.focus(); return; }
+  if (a === "assign-me") { await setField(S.selected, "assigneeEmail", S.user.email); toast("Assigned to you"); return; }
+  if (a === "close") { if (await setField(S.selected, "status", "Closed")) toast("Ticket closed. The requester has been emailed."); return; }
+  if (a === "reopen") { if (await setField(S.selected, "status", "Open")) toast("Ticket reopened"); return; }
   if (a === "new") openNew();
-  else if (a === "settings") openSettings();
+  else if (a === "settings") { S.page = "settings"; S.selected = null; S.userMenu = false; S.navOpen = false; render(); document.getElementById("main")?.scrollTo(0, 0); }
   else if (a === "signout") signOut();
   else if (a === "back") { S.selected = null; render(); }
   else if (a === "clear-contact") { S.contact = null; render(); }
@@ -424,13 +552,17 @@ root.addEventListener("click", async e => {
   }
 });
 root.addEventListener("submit", e => { if (e.target.id === "portalForm") { e.preventDefault(); if (!S.psending) submitRequest(); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && (S.userMenu || S.navOpen || S.searchOpen || S.bellOpen)) { S.userMenu = S.navOpen = S.searchOpen = S.bellOpen = false; render(); return; }
+  if (e.key === "/" && S.user && S.user.isAgent && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") && !dlgNew.open) { e.preventDefault(); const q = document.getElementById("q"); if (q) { if (getComputedStyle(q.parentElement).display === "none") { S.searchOpen = true; render(); } document.getElementById("q").focus(); } }
+});
 root.addEventListener("keydown", e => {
   if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-open],tr[data-contact]")) { e.preventDefault(); e.target.click(); }
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.target.id === "cBody") sendMessage(S.cmode, false);
 });
 root.addEventListener("input", e => {
   const t = e.target;
-  if (t.id === "q") { S.search = t.value; render(); }
+  if (t.id === "q") { S.search = t.value; if (S.user.isAgent && S.page !== "contacts" && (S.page !== "tickets" || S.selected)) { S.page = "tickets"; S.selected = null; } render(); }
   if (t.id === "cBody" && S.selected) S.drafts[S.selected] = t.value;
   if (t.dataset.pf) S.pform[t.dataset.pf] = t.value;
   if (t.dataset.preply) S.preply[t.dataset.preply] = t.value;
@@ -479,59 +611,221 @@ document.getElementById("newForm").addEventListener("submit", async e => {
   } catch (e2) { }
   btn.disabled = false; btn.textContent = "Create ticket";
 });
-const dlgSet = document.getElementById("dlgSettings");
-function openSettings() { renderSettings(); dlgSet.showModal(); }
-function renderSettings() {
-  const chip = (label, kind, i) => `<span>${esc(label)}<button data-rm="${kind}" data-i="${i}" aria-label="Remove ${esc(label)}">×</button></span>`;
-  document.getElementById("agentChips").innerHTML = S.settings.agents.length ? S.settings.agents.map((a, i) => chip(`${a.name} · ${a.email}`, "agents", i)).join("") : `<span style="padding:2px 10px;color:var(--muted)">None yet</span>`;
-  document.getElementById("deptChips").innerHTML = S.settings.departments.map((d, i) => chip(d, "departments", i)).join("");
-  document.getElementById("slaFields").innerHTML = PRIORITIES.map(p => `<div class="field"><label for="sla-${p}">${p}</label><input id="sla-${p}" type="number" min="1" max="720" value="${S.settings.sla[p]}" data-sla="${p}"></div>`).join("");
-  document.getElementById("mailInfo").textContent = `Notifications are sent from ${S.cfg.supportEmail}, and new emails to it become tickets every 5 minutes.`;
+/* ---------- settings (admin area) ---------- */
+const DAYS = [["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"], ["5", "Fri"], ["6", "Sat"], ["0", "Sun"]];
+const OFFSETS = [-300, -240, 0, 60, 120, 180, 240, 330, 480];
+function offLabel(m) { const sgn = m < 0 ? "−" : "+"; const a = Math.abs(m); return `UTC${sgn}${String(Math.floor(a / 60)).padStart(2, "0")}:${String(a % 60).padStart(2, "0")}${m === 60 ? " (Lagos, West Africa Time)" : m === 0 ? " (London winter, GMT)" : ""}`; }
+function addBusinessTime(startMs, hours, sla) {
+  const bh = sla && sla.businessHours; const toMin = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
+  if (!bh || !bh.enabled || !bh.days.length) return startMs + hours * 36e5;
+  const sm = toMin(bh.start), em = toMin(bh.end); if (em <= sm) return startMs + hours * 36e5;
+  const off = bh.utcOffset * 6e4, days = new Set(bh.days.map(Number)), hol = new Set(sla.holidays || []);
+  let rem = hours * 60, t = startMs + off;
+  for (let g = 0; g < 1000 && rem > 0; g++) {
+    const d = new Date(t), ds = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()), ws = ds + sm * 6e4, we = ds + em * 6e4;
+    if (!days.has(d.getUTCDay()) || hol.has(new Date(ds).toISOString().slice(0, 10)) || t >= we) { t = ds + 864e5 + sm * 6e4; continue; }
+    if (t < ws) t = ws; const av = (we - t) / 6e4;
+    if (rem <= av) { t += rem * 6e4; rem = 0; } else { rem -= av; t = ds + 864e5 + sm * 6e4; }
+  }
+  return t - off;
 }
-async function saveSettings(next) {
-  try { S.settings = { ...S.settings, ...(await api("PUT", "/settings", next)) }; renderSettings(); render(); toast("Settings saved"); } catch (e) { }
+function slaDraft() { if (!S.slaDraft) S.slaDraft = JSON.parse(JSON.stringify(S.settings.sla)); return S.slaDraft; }
+function renderSettingsPage() {
+  if (!S.user.isAdmin) return `<div class="page"><div class="card empty"><h3>Admins only</h3><p>Ask a service desk admin to change settings.</p></div></div>`;
+  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["branding", "Branding", "edit"], ["email", "Email", "mail"]];
+  const body = { users: setUsers, sla: setSla, departments: setDepartments, branding: setBranding, email: setEmail }[S.stab] || setUsers;
+  return `<div class="page">
+    <div class="page-head"><div><h1>Settings</h1><p>Manage who works on the desk, response targets and how the desk looks.</p></div></div>
+    <div class="settings-layout">
+      <nav class="card settings-tabs" aria-label="Settings sections">${tabs.map(t => `<button data-stab="${t[0]}" aria-current="${S.stab === t[0]}">${ico(t[2])}<span>${t[1]}</span></button>`).join("")}</nav>
+      <div class="settings-body">${body()}</div>
+    </div></div>`;
 }
-document.getElementById("agentAdd").onclick = () => {
-  const n = document.getElementById("agentName"), m = document.getElementById("agentEmail");
-  const name = n.value.trim(), email = m.value.trim().toLowerCase();
-  if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Add the agent’s name and a valid work email."); return; }
-  if (S.settings.agents.some(a => a.email === email)) { toast("That agent is already on the list."); return; }
-  n.value = ""; m.value = "";
-  saveSettings({ ...S.settings, agents: [...S.settings.agents, { name, email }] });
-};
-document.getElementById("deptAdd").onclick = () => {
-  const i = document.getElementById("deptIn"); const v = i.value.trim(); if (!v) return;
-  if (S.settings.departments.some(d => d.toLowerCase() === v.toLowerCase())) { toast("That department already exists."); return; }
-  i.value = ""; saveSettings({ ...S.settings, departments: [...S.settings.departments, v] });
-};
-document.getElementById("deptIn").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("deptAdd").click(); } };
-dlgSet.addEventListener("click", e => {
-  const b = e.target.closest("[data-rm]"); if (!b) return;
-  const k = b.dataset.rm; const arr = [...S.settings[k]]; arr.splice(Number(b.dataset.i), 1);
-  saveSettings({ ...S.settings, [k]: arr });
+function setUsers() {
+  const users = S.settings.users || []; const nu = S.unew;
+  const sugg = S.dir && S.dir.length && S.uq.trim().length >= 2 ? `<div class="suggest" role="listbox">${S.dir.map((p, i) => `<button role="option" data-pick="${i}"><span class="avatar">${esc(initials(p.name))}</span><span><b>${esc(p.name)}</b><small>${esc(p.email)}${p.title ? `, ${esc(p.title)}` : ""}</small></span></button>`).join("")}</div>` : "";
+  return `<section class="card section-card">
+    <h2>Users</h2><p>People listed here can sign in to the agent desk. Everyone else in ${esc(S.cfg.orgName)} who signs in gets the request portal.</p>
+    <div class="adduser">
+      <div class="field typeahead"><label for="uSearch">Find someone in ${esc(S.cfg.orgName)}</label>
+        <input id="uSearch" type="search" placeholder="Start typing a name or email" value="${esc(S.uq)}" autocomplete="off">${sugg}
+        ${S.dirAvailable === false ? `<small>Directory search isn’t switched on, so enter the name and email below. To turn it on, add the User.Read.All application permission in Entra (see the README).</small>` : ""}
+      </div>
+      <div class="cols4">
+        <div class="field"><label for="uName">Full name</label><input id="uName" data-unew="name" value="${esc(nu.name)}" maxlength="80"></div>
+        <div class="field"><label for="uEmail">Work email</label><input id="uEmail" data-unew="email" type="email" value="${esc(nu.email)}" maxlength="160"></div>
+        <div class="field"><label for="uRole">Role</label><select id="uRole" data-unew="role">${opt(["Agent", "Admin"], nu.role || "Agent")}</select></div>
+        <div class="field"><span class="flabel" aria-hidden="true">&nbsp;</span><button class="btn primary" data-act="uadd">${ico("plus")}Add user</button></div>
+      </div>
+      <div class="role-help"><span><b>Agent</b> works on tickets.</span><span><b>Admin</b> works on tickets and manages these settings.</span></div>
+    </div></section>
+    <section class="card table-card" style="margin-top:16px">${users.length ? `<table class="dtable"><thead><tr><th>Name</th><th class="hide-sm">Email</th><th>Role</th><th class="hide-md">Open tickets</th><th><span class="sr">Actions</span></th></tr></thead><tbody>
+      ${users.map(u => `<tr style="cursor:default"><td><div class="c-who"><span class="avatar">${esc(initials(u.name))}</span><span><b>${esc(u.name)}</b>${u.email === S.user.email ? ` <span class="tag">You</span>` : ""}</span></div></td>
+        <td class="hide-sm c-muted">${esc(u.email)}</td>
+        <td><label class="sr" for="role-${esc(u.email)}">Role for ${esc(u.name)}</label><select class="role-select" id="role-${esc(u.email)}" data-urole="${esc(u.email)}">${opt(["Agent", "Admin"], u.role)}</select></td>
+        <td class="hide-md">${S.tickets.filter(t => t.assigneeEmail === u.email && t.status !== "Closed").length}</td>
+        <td style="text-align:right"><button class="btn sm danger" data-uremove="${esc(u.email)}">Remove</button></td></tr>`).join("")}
+      </tbody></table>` : `<div class="empty"><h3>No users yet</h3><p>Add the people who work on tickets. Until there’s at least one admin here, anyone with the Service Desk Agent role in Entra can manage settings.</p></div>`}</section>`;
+}
+function setSla() {
+  const d = slaDraft(); const bh = d.businessHours;
+  const sample = addBusinessTime(Date.now(), d.resolution.High, d);
+  const dirty = JSON.stringify(d) !== JSON.stringify(S.settings.sla);
+  return `<section class="card section-card">
+    <h2>Response and resolution targets</h2><p>How quickly the team should first respond to, and fully resolve, each priority. Times are in ${bh.enabled ? "working" : "calendar"} hours.</p>
+    <div class="table-card sla-table"><table class="dtable"><thead><tr><th>Priority</th><th>First response</th><th>Resolution</th></tr></thead><tbody>
+      ${PRIORITIES.map(p => `<tr style="cursor:default"><td>${prio(p)}</td>
+        <td><div class="hours"><input type="number" min="0.25" max="720" step="0.25" id="rsp-${p}" data-sla="response.${p}" value="${d.response[p]}" aria-label="${p} first response hours"><span>hours</span></div></td>
+        <td><div class="hours"><input type="number" min="0.5" max="2160" step="0.5" id="res-${p}" data-sla="resolution.${p}" value="${d.resolution[p]}" aria-label="${p} resolution hours"><span>hours</span></div></td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="field" style="margin-top:16px;max-width:360px"><label for="warnAt">Show a warning when this much time is left</label><div class="hours"><input type="number" id="warnAt" min="5" max="90" step="5" data-sla="warnAt" value="${d.warnAt}"><span>% of the target</span></div><small>Tickets turn amber in the queue at this point, and red once they’re overdue.</small></div>
+  </section>
+  <section class="card section-card" style="margin-top:16px">
+    <h2>Business hours</h2><p>When switched on, the SLA clock only runs during working hours, so a ticket raised on Friday evening isn’t overdue by Monday morning.</p>
+    <label class="switch"><input type="checkbox" id="bhOn" data-sla="businessHours.enabled" ${bh.enabled ? "checked" : ""}><span>Count only business hours</span></label>
+    <fieldset class="bh" ${bh.enabled ? "" : "disabled"}>
+      <div class="cols4">
+        <div class="field"><label for="bhStart">Day starts</label><input type="time" id="bhStart" data-sla="businessHours.start" value="${bh.start}"></div>
+        <div class="field"><label for="bhEnd">Day ends</label><input type="time" id="bhEnd" data-sla="businessHours.end" value="${bh.end}"></div>
+        <div class="field" style="grid-column:span 2"><label for="bhTz">Time zone</label><select id="bhTz" data-sla="businessHours.utcOffset">${(OFFSETS.includes(bh.utcOffset) ? OFFSETS : [...OFFSETS, bh.utcOffset]).map(o => `<option value="${o}"${o === bh.utcOffset ? " selected" : ""}>${offLabel(o)}</option>`).join("")}</select></div>
+      </div>
+      <span class="flabel">Working days</span>
+      <div class="daypicks">${DAYS.map(([v, l]) => `<label><input type="checkbox" data-sladay="${v}" ${bh.days.map(String).includes(v) ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
+      <div class="field" style="margin-top:16px"><label for="holIn">Public holidays and office closures</label>
+        <div class="addrow" style="max-width:360px"><input type="date" id="holIn"><button class="btn" data-act="holadd" type="button">Add date</button></div>
+        <div class="chips">${d.holidays.length ? d.holidays.map(h => `<span>${new Date(h + "T12:00:00Z").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}<button data-holremove="${h}" aria-label="Remove ${h}">×</button></span>`).join("") : `<small class="c-muted">No holidays added.</small>`}</div>
+      </div>
+    </fieldset>
+  </section>
+  <div class="savebar card"><span>${dirty ? "You have unsaved changes." : "All changes saved."} With these settings, a High priority ticket raised now would be due by <b>${fmt(sample)}</b>.</span>
+    <span class="savebar-actions"><button class="btn" data-act="slareset" ${dirty ? "" : "disabled"}>Discard</button><button class="btn primary" data-act="slasave" ${dirty ? "" : "disabled"}>Save SLA policy</button></span></div>
+  <p class="c-muted" style="font-size:13px;margin-top:10px">New targets apply to tickets raised from now on, and when an existing ticket’s priority changes.</p>`;
+}
+function setDepartments() {
+  const ds = S.settings.departments;
+  return `<section class="card section-card"><h2>Departments</h2><p>Teams that requests can be routed to. They appear in the request form and on every ticket.</p>
+    <div class="addrow" style="max-width:460px"><input id="deptIn" placeholder="Department name" maxlength="80" aria-label="Department name"><button class="btn primary" data-act="deptadd">${ico("plus")}Add</button></div>
+    <div class="table-card" style="margin-top:16px;border:1px solid var(--line);border-radius:var(--radius-l)"><table class="dtable"><thead><tr><th>Department</th><th>Open tickets</th><th><span class="sr">Actions</span></th></tr></thead><tbody>
+    ${ds.map((d, i) => `<tr style="cursor:default"><td><b>${esc(d)}</b></td><td>${S.tickets.filter(t => t.department === d && t.status !== "Closed").length}</td><td style="text-align:right"><button class="btn sm danger" data-dremove="${i}" ${ds.length <= 1 ? "disabled" : ""}>Remove</button></td></tr>`).join("")}
+    </tbody></table></div></section>`;
+}
+function setBranding() {
+  const src = logoSrc();
+  return `<section class="card section-card"><h2>Logo</h2><p>Shown in the top bar, on the sign-in page and at the top of every notification email.</p>
+    <div class="logo-previews">
+      <div><span class="flabel">Top bar</span><div class="lp lp-top">${src ? `<img src="${esc(src)}" alt="Current logo">` : `<span class="wordmark">${esc(S.cfg.orgName)}</span>`}<span class="product">Service Desk</span></div></div>
+      <div><span class="flabel">Email header</span><div class="lp lp-mail">${src ? `<img src="${esc(src)}" alt="">` : `<span class="wordmark">${esc(S.cfg.orgName)}</span>`}<i></i></div></div>
+    </div>
+    <div class="upload">
+      <label class="btn primary" for="logoFile">${ico("up")}${src ? "Replace logo" : "Upload logo"}</label>
+      <input type="file" id="logoFile" accept="image/png,image/jpeg" class="sr">
+      ${S.settings.logoUrl ? `<button class="btn danger" data-act="logoremove">Remove logo</button>` : ""}
+      ${S.uploading ? `<span class="c-muted">Uploading…</span>` : ""}
+    </div>
+    <ul class="guidelines"><li>PNG with a transparent background works best. JPG is also accepted.</li><li>Use the horizontal version of the logo, around 400 × 100 pixels. It’s shown 32 pixels tall.</li><li>Maximum file size is 1 MB. The file is stored in your SharePoint site.</li></ul>
+  </section>
+  <section class="card section-card" style="margin-top:16px"><h2>Colours</h2><p>The desk uses ${esc(S.cfg.orgName)} navy for navigation and buttons, and green as the accent.</p>
+    <div class="swatches"><span><i style="background:#0B2D5B"></i>Navy #0B2D5B</span><span><i style="background:#76B82A"></i>Green #76B82A</span></div></section>`;
+}
+function setEmail() {
+  return `<section class="card section-card"><h2>Email</h2><p>Notifications are sent from, and requests are received at, the support mailbox.</p>
+    <dl class="kv" style="max-width:560px"><dt>Mailbox</dt><dd><b>${esc(S.cfg.supportEmail)}</b></dd><dt>Checked</dt><dd>Every 5 minutes</dd><dt>Requesters get</dt><dd>Confirmation, replies, status changes and resolution</dd><dt>Agents get</dt><dd>New assignments and requester replies</dd></dl>
+    <div style="margin-top:18px"><button class="btn" data-act="mailcheck" ${S.mailChecking ? "disabled" : ""}>${ico("refresh")}${S.mailChecking ? "Checking…" : "Check mailbox now"}</button></div></section>`;
+}
+async function saveSettingsPart(part, msg) {
+  try { const r = await api("PUT", "/settings", part); S.settings = { ...S.settings, ...r }; S.slaDraft = null; toast(msg || "Settings saved"); } catch (e) { }
+  render();
+}
+let dirTimer = null;
+async function runDirSearch() {
+  const q = S.uq.trim(); if (q.length < 2) { S.dir = []; render(); return; }
+  try { const r = await api("GET", "/directory?q=" + encodeURIComponent(q)); if (q !== S.uq.trim()) return; S.dirAvailable = r.available; S.dir = r.people || []; } catch (e) { S.dir = []; }
+  render();
+}
+function setPath(obj, path, val) { const k = path.split("."); let o = obj; for (let i = 0; i < k.length - 1; i++) o = o[k[i]]; o[k[k.length - 1]] = val; }
+root.addEventListener("click", async e => {
+  const el = e.target.closest("[data-stab],[data-pick],[data-uremove],[data-dremove],[data-holremove],[data-act^='u'],[data-act^='sla'],[data-act^='hol'],[data-act^='dept'],[data-act^='logo'],[data-act='mailcheck']");
+  if (!el || !S.user || !S.user.isAdmin) return;
+  if (el.dataset.stab) { S.stab = el.dataset.stab; render(); return; }
+  if (el.dataset.pick != null) { const p = S.dir[Number(el.dataset.pick)]; S.unew = { ...S.unew, name: p.name, email: p.email }; S.uq = ""; S.dir = []; render(); document.getElementById("uRole")?.focus(); return; }
+  const users = S.settings.users || [];
+  if (el.dataset.uremove) {
+    const u = users.find(x => x.email === el.dataset.uremove); if (!u) return;
+    const admins = users.filter(x => x.role === "Admin");
+    if (u.role === "Admin" && admins.length === 1 && u.email === S.user.email) { toast("Add another admin before removing yourself."); return; }
+    if (!confirm(`Remove ${u.name}? They’ll lose access to the agent desk. Tickets assigned to them stay assigned until you change them.`)) return;
+    await saveSettingsPart({ users: users.filter(x => x.email !== u.email) }, `${u.name} removed`); return;
+  }
+  if (el.dataset.dremove != null) { const ds = [...S.settings.departments]; const [gone] = ds.splice(Number(el.dataset.dremove), 1); await saveSettingsPart({ departments: ds }, `${gone} removed`); return; }
+  if (el.dataset.holremove) { const d = slaDraft(); d.holidays = d.holidays.filter(h => h !== el.dataset.holremove); render(); return; }
+  const a = el.dataset.act;
+  if (a === "uadd") {
+    const name = (S.unew.name || "").trim(), email = (S.unew.email || "").trim().toLowerCase(), role = S.unew.role || "Agent";
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Enter the person’s full name and a valid work email."); return; }
+    if (users.some(u => u.email === email)) { toast("That person is already a user."); return; }
+    S.unew = { name: "", email: "", role: "Agent" };
+    await saveSettingsPart({ users: [...users, { name, email, role }] }, `${name} added as ${role === "Admin" ? "an admin" : "an agent"}`); return;
+  }
+  if (a === "holadd") { const v = document.getElementById("holIn").value; if (!v) { toast("Pick a date first."); return; } const d = slaDraft(); if (!d.holidays.includes(v)) d.holidays = [...d.holidays, v].sort(); render(); return; }
+  if (a === "slareset") { S.slaDraft = null; render(); return; }
+  if (a === "slasave") { await saveSettingsPart({ sla: slaDraft() }, "SLA policy saved"); return; }
+  if (a === "deptadd") {
+    const i = document.getElementById("deptIn"); const v = i.value.trim(); if (!v) return;
+    if (S.settings.departments.some(d => d.toLowerCase() === v.toLowerCase())) { toast("That department already exists."); return; }
+    await saveSettingsPart({ departments: [...S.settings.departments, v] }, `${v} added`); return;
+  }
+  if (a === "logoremove") { if (!confirm("Remove the logo? The desk and emails will show the name as text instead.")) return; try { const r = await api("DELETE", "/brand/logo"); S.settings = { ...S.settings, ...r }; toast("Logo removed"); } catch (e2) { } render(); return; }
+  if (a === "mailcheck") { S.mailChecking = true; render(); try { const r = await api("POST", "/mail/check"); toast(`Mailbox checked: ${r.created} new tickets, ${r.replies} replies added.`); await loadAgent(); } catch (e2) { } S.mailChecking = false; render(); return; }
 });
-dlgSet.addEventListener("change", e => {
-  const p = e.target.dataset.sla; if (!p) return;
-  const n = Math.max(1, Math.min(720, Number(e.target.value) || 0)); if (!n) return;
-  saveSettings({ ...S.settings, sla: { ...S.settings.sla, [p]: n } });
+root.addEventListener("input", e => {
+  const t = e.target; if (!S.user || !S.user.isAdmin) return;
+  if (t.id === "uSearch") { S.uq = t.value; clearTimeout(dirTimer); dirTimer = setTimeout(runDirSearch, 300); if (t.value.trim().length < 2) { S.dir = []; render(); } return; }
+  if (t.dataset.unew) { S.unew[t.dataset.unew] = t.value; return; }
+  if (t.dataset.sla && t.type === "number") { const v = Number(t.value); if (t.value !== "" && Number.isFinite(v)) { setPath(slaDraft(), t.dataset.sla, v); updateSaveBar(); } }
 });
-document.getElementById("mailCheck").onclick = async e => {
-  const b = e.target; b.disabled = true; b.textContent = "Checking…";
-  try { const r = await api("POST", "/mail/check"); toast(`Mailbox checked: ${r.created} new tickets, ${r.replies} replies added.`); await loadAgent(); render(); } catch (e2) { }
-  b.disabled = false; b.textContent = "Check mailbox now";
-};
+function updateSaveBar() { const bar = document.querySelector(".savebar"); if (!bar) return; const d = slaDraft(); const dirty = JSON.stringify(d) !== JSON.stringify(S.settings.sla); bar.querySelector("span").innerHTML = `${dirty ? "You have unsaved changes." : "All changes saved."} With these settings, a High priority ticket raised now would be due by <b>${fmt(addBusinessTime(Date.now(), d.resolution.High, d))}</b>.`; bar.querySelectorAll("button").forEach(b => b.disabled = !dirty); }
+root.addEventListener("change", async e => {
+  const t = e.target; if (!S.user || !S.user.isAdmin) return;
+  if (t.dataset.unew) { S.unew[t.dataset.unew] = t.value; return; }
+  if (t.dataset.urole) { const users = S.settings.users.map(u => u.email === t.dataset.urole ? { ...u, role: t.value } : u); if (!users.some(u => u.role === "Admin") && S.settings.users.some(u => u.role === "Admin")) { if (!confirm("There will be no admins left in this list. Anyone with the Service Desk Agent role in Entra will then be able to manage settings. Continue?")) { render(); return; } } await saveSettingsPart({ users }, "Role updated"); return; }
+  if (t.dataset.sla) { const v = t.type === "checkbox" ? t.checked : t.type === "number" || t.dataset.sla.endsWith("utcOffset") ? Number(t.value) : t.value; setPath(slaDraft(), t.dataset.sla, v); render(); return; }
+  if (t.dataset.sladay != null) { const d = slaDraft(); const set = new Set(d.businessHours.days.map(Number)); t.checked ? set.add(Number(t.dataset.sladay)) : set.delete(Number(t.dataset.sladay)); d.businessHours.days = [...set].sort(); render(); return; }
+  if (t.id === "logoFile" && t.files && t.files[0]) {
+    const f = t.files[0];
+    if (!/^image\/(png|jpeg)$/.test(f.type)) { toast("Choose a PNG or JPG image."); return; }
+    if (f.size > 1024 * 1024) { toast("The logo must be smaller than 1 MB."); return; }
+    S.uploading = true; render();
+    const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+    try { const r = await api("PUT", "/brand/logo", { dataUrl }); S.settings = { ...S.settings, ...r }; toast("Logo updated. It now appears across the desk and in emails."); } catch (e2) { }
+    S.uploading = false; render();
+  }
+});
+root.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "deptIn") { e.preventDefault(); document.querySelector('[data-act="deptadd"]')?.click(); } });
 
 /* ---------- start ---------- */
-function fatal(msg) { root.innerHTML = `<div class="signin"><div class="card"><div class="brand-mark" aria-hidden="true">✦</div><h1>Service Desk</h1><p>${esc(msg)}</p></div></div>`; }
+function fatal(msg) { root.innerHTML = `<div class="signin-form" style="min-height:100%"><div class="signin-card"><div class="logo">${logoHTML()}</div><h2>We can’t open the service desk</h2><p>${esc(msg)}</p><button class="btn primary">Try again</button></div></div>`; document.querySelector(".signin-card .btn").onclick = () => location.reload(); }
 function renderSignIn() {
-  root.innerHTML = `<div class="signin"><div class="card"><div class="brand-mark" aria-hidden="true">✦</div>
-    <h1>${esc(S.cfg.orgName)} Service Desk</h1><p>Sign in with your work Microsoft account to raise a request or work on tickets.</p>
-    <button class="btn primary" id="signInBtn">Sign in with Microsoft</button></div></div>`;
+  root.innerHTML = `<div class="signin">
+    <section class="signin-brand">
+      <div><h1>${esc(S.cfg.orgName)} Service Desk</h1><p>One place to raise requests, follow their progress and get help from the support team.</p>
+        <ul><li>${ico("edit")}Raise requests in a few clicks</li><li>${ico("bell")}Email updates at every step</li><li>${ico("shield")}Secured with your Microsoft 365 account</li></ul></div>
+      <div class="small">Support: ${esc(S.cfg.supportEmail)}</div>
+    </section>
+    <section class="signin-form"><div class="signin-card">
+      <div class="logo">${logoHTML(false)}</div>
+      <h2>Sign in</h2><p>Use your ${esc(S.cfg.orgName)} work account.</p>
+      <button class="btn primary" id="signInBtn">Sign in with Microsoft</button>
+      <p class="help">Having trouble signing in? Email ${esc(S.cfg.supportEmail)}.</p>
+    </div></section></div>`;
   document.getElementById("signInBtn").onclick = () => pca.loginRedirect({ scopes: SCOPES });
+}
+function checkLogo() {
+  return new Promise(res => { const img = new Image(); img.onload = () => { S.logoOk = img.naturalWidth > 0; res(); }; img.onerror = () => res(); img.src = "/brand/logo.png"; setTimeout(res, 2500); });
 }
 async function boot() {
   try { S.cfg = await (await fetch("/api/config")).json(); } catch (e) { fatal("Couldn’t reach the server. Try again in a moment."); return; }
   if (!S.cfg || !S.cfg.clientId) { fatal((S.cfg && S.cfg.error) || "The server isn’t configured yet. Check the Netlify environment variables."); return; }
+  if (!S.cfg.logoUrl) await checkLogo();
   if (!window.msal) { fatal("The sign-in library didn’t load. Check that the build step ran."); return; }
   pca = new window.msal.PublicClientApplication({
     auth: { clientId: S.cfg.clientId, authority: `https://login.microsoftonline.com/${S.cfg.tenantId}`, redirectUri: location.origin + "/" },
@@ -544,9 +838,9 @@ async function boot() {
   pca.setActiveAccount(account);
   try { S.user = await api("GET", "/me"); } catch (e) { fatal("We couldn’t confirm your sign-in. Reload the page to try again."); return; }
   const h = (location.hash || "").slice(1);
-  if (["dashboard", "contacts", "portal"].includes(h)) S.page = h;
+  if (["dashboard", "contacts", "portal", "settings"].includes(h)) S.page = h;
   if (VIEWS.some(v => v[0] === h)) { S.page = "tickets"; S.view = h; }
-  if (!S.user.isAgent && h === "portal") S.ptab = "mine";
+  if (!S.user.isAgent && (h === "portal" || h === "mine")) S.ptab = "mine";
   render();
   try {
     if (S.user.isAgent) { await loadAgent(); if (S.page === "portal") await loadMine(); }
@@ -559,7 +853,7 @@ async function boot() {
       if (S.user.isAgent) { await loadAgent(); if (S.selected) S.details[S.selected] = await api("GET", "/tickets/" + S.selected); }
       if (!S.user.isAgent || S.page === "portal") { await loadMine(); if (S.psel) S.myDetails[S.psel] = await api("GET", "/tickets/" + S.psel); }
       const a = document.activeElement;
-      if (!(a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT" || a.tagName === "SELECT")) && !dlgNew.open && !dlgSet.open) render();
+      if (!(a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT" || a.tagName === "SELECT")) && !dlgNew.open) render();
     } catch (e) { }
   }, 30000);
 }

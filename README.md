@@ -81,6 +81,7 @@ Go to **entra.microsoft.com** → **Applications** → **App registrations** →
    - `Sites.ReadWrite.All` (read and write the SharePoint lists)
    - `Mail.Send` (send notifications)
    - `Mail.ReadWrite` (read the support inbox and mark emails as processed)
+   - `Sites.Manage.All` (needed only so `npm run setup` can create the lists and columns; you can remove it afterwards)
 
    Then select **Grant admin consent for InfraCredit**.
 8. Go to **Enterprise applications** → `InfraCredit Service Desk` → **Users and groups** → **Add user/group**. Choose your support agents, or better, a group such as `Service Desk Agents`, and give them the **Service Desk Agent** role.
@@ -211,6 +212,7 @@ Then open http://localhost:8888. The scheduled email check doesn't run locally, 
 | Microsoft sign-in error AADSTS50011 | The site address isn't in the Entra SPA redirect URIs. Check the exact address, including the trailing `/`. |
 | Signed in, but only the portal shows for an agent | The person doesn't have the **Service Desk Agent** role yet. Sign out and back in after it's assigned. |
 | "SharePoint list … was not found" | `npm run setup` hasn't been run against this site, or the site path is wrong. |
+| `npm run setup` fails with 403 on `/lists` | The app needs `Sites.Manage.All` (application) with admin consent to create lists. Also check that the site path in `.env` matches Netlify. |
 | Graph error 403 in the function logs | Admin consent is missing, or an access policy is blocking the mailbox or site. |
 | No emails are going out | Check `SUPPORT_MAILBOX` and the `Mail.Send` permission. Errors are logged in Netlify under **Functions** → **api**. |
 | Emails aren't turning into tickets | Check the **email-poll** function logs. Scheduled functions run only on the published production deploy. |

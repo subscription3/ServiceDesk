@@ -1,11 +1,12 @@
 // All /api/* requests from the browser.
 import { env } from "../../lib/graph.mjs";
 import { healthCheck } from "../../lib/health.mjs";
-import { authenticate, requireAgent, httpError } from "../../lib/auth.mjs";
+import { authenticate, requireAgent, requireAdmin, httpError } from "../../lib/auth.mjs";
 import {
-  getSettings, saveSettings, publicSettings, listTickets, listMine, getDetail,
+  getSettings, saveSettings, publicSettings, logoUrl, listTickets, listMine, getDetail,
   createTicket, updateTicket, addMessage, deleteTicket,
 } from "../../lib/tickets.mjs";
+import { decodeLogo, uploadLogo, downloadLogo, deleteLogoFiles, searchDirectory } from "../../lib/brand.mjs";
 import { pollInbox } from "../../lib/inbox.mjs";
 
 const json = (data, status = 200) =>
@@ -21,9 +22,25 @@ export default async (req) => {
   const method = req.method;
   try {
     if (path === "/config" && method === "GET") {
+      let logo = "";
+      try { logo = logoUrl(await getSettings()); } catch { /* lists may not exist yet */ }
       return json({
         clientId: env("AZURE_CLIENT_ID"), tenantId: env("AZURE_TENANT_ID"),
-        orgName: process.env.ORG_NAME || "InfraCredit", supportEmail: env("SUPPORT_MAILBOX"),
+        orgName: process.env.ORG_NAME || "InfraCredit", supportEmail: env("SUPPORT_MAILBOX"), logoUrl: logo,
+      });
+    }
+
+    // The logo is public: it appears on the sign-in page and in emails.
+    if (path === "/brand/logo" && method === "GET") {
+      const s = await getSettings();
+      const buf = s.branding.logoVersion ? await downloadLogo(s.branding.logoExt) : null;
+      if (!buf) return new Response("Not found", { status: 404 });
+      return new Response(buf, {
+        headers: {
+          "Content-Type": s.branding.logoExt === "jpg" ? "image/jpeg" : "image/png",
+          "Cache-Control": url.searchParams.get("v") ? "public, max-age=31536000, immutable" : "public, max-age=300",
+          "X-Content-Type-Options": "nosniff",
+        },
       });
     }
 
@@ -38,11 +55,30 @@ export default async (req) => {
 
     if (path === "/settings" && method === "GET") {
       const s = await getSettings();
-      return json(user.isAgent ? publicSettings(s) : { departments: s.departments });
+      const pub = publicSettings(s);
+      return json(user.isAgent ? pub : { departments: pub.departments, logoUrl: pub.logoUrl });
     }
     if (path === "/settings" && method === "PUT") {
-      requireAgent(user);
-      return json(await saveSettings(await readBody(req)));
+      requireAdmin(user);
+      const b = await readBody(req);
+      const input = {};
+      for (const k of ["departments", "users", "sla"]) if (k in b) input[k] = b[k];
+      return json(await saveSettings(input));
+    }
+    if (path === "/brand/logo" && method === "PUT") {
+      requireAdmin(user);
+      const logo = decodeLogo((await readBody(req)).dataUrl);
+      await uploadLogo(logo);
+      return json(await saveSettings({ branding: { logoVersion: Date.now(), logoExt: logo.ext } }));
+    }
+    if (path === "/brand/logo" && method === "DELETE") {
+      requireAdmin(user);
+      await deleteLogoFiles();
+      return json(await saveSettings({ branding: { logoVersion: 0, logoExt: "png" } }));
+    }
+    if (path === "/directory" && method === "GET") {
+      requireAdmin(user);
+      return json(await searchDirectory(url.searchParams.get("q")));
     }
 
     if (path === "/tickets" && method === "GET") {
