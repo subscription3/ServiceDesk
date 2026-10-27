@@ -1,5 +1,6 @@
 // All /api/* requests from the browser.
 import { env } from "../../lib/graph.mjs";
+import { healthCheck } from "../../lib/health.mjs";
 import { authenticate, requireAgent, httpError } from "../../lib/auth.mjs";
 import {
   getSettings, saveSettings, publicSettings, listTickets, listMine, getDetail,
@@ -24,6 +25,11 @@ export default async (req) => {
         clientId: env("AZURE_CLIENT_ID"), tenantId: env("AZURE_TENANT_ID"),
         orgName: process.env.ORG_NAME || "InfraCredit", supportEmail: env("SUPPORT_MAILBOX"),
       });
+    }
+
+    if (path === "/health" && method === "GET") {
+      const r = await healthCheck();
+      return json(r, r.ok ? 200 : 500);
     }
 
     const user = await authenticate(req);
@@ -83,9 +89,10 @@ export default async (req) => {
 
     return json({ error: "Not found" }, 404);
   } catch (e) {
-    const status = e.status && e.status < 500 ? e.status : 500;
-    if (status === 500) console.error(e);
-    return json({ error: status === 500 ? "Something went wrong on the server. Check the Netlify function logs." : e.message }, status);
+    const status = e.status && e.status < 500 && !e.expose ? e.status : 500;
+    console.error(`${method} ${path} failed:`, e.message);
+    const message = e.expose || status < 500 ? e.message : "Something went wrong on the server. Open /api/health on this site to see which connection is failing.";
+    return json({ error: message }, status);
   }
 };
 

@@ -202,8 +202,11 @@ Then open http://localhost:8888. The scheduled email check doesn't run locally, 
 
 ## Troubleshooting
 
+**Start here:** open `https://<your-site>/api/health` in a browser. It tests each connection in order and tells you which setting is wrong. It never shows secret values. The same detailed errors appear in Netlify under **Logs** → **Functions** → **api**.
+
 | What you see | Likely cause |
 |---|---|
+| `/api/health` says the client secret looks like a Secret ID | In Entra, two values appear next to each secret. `AZURE_CLIENT_SECRET` needs the **Value**, not the **Secret ID**. If you no longer have the Value, create a new secret. |
 | "The server isn't configured yet" | An environment variable is missing in Netlify. Redeploy after adding it. |
 | Microsoft sign-in error AADSTS50011 | The site address isn't in the Entra SPA redirect URIs. Check the exact address, including the trailing `/`. |
 | Signed in, but only the portal shows for an agent | The person doesn't have the **Service Desk Agent** role yet. Sign out and back in after it's assigned. |
