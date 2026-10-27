@@ -15,7 +15,7 @@ const SCHEMA = {
     text("AssigneeName"), text("AssigneeEmail", true), text("RequesterName"), text("RequesterEmail", true), text("RequesterPhone"),
     text("Tags"), date("DueAt"), date("FirstResponseAt"), date("ClosedAt"), date("HoldAt"), date("LastActivityAt"), text("SourceMessageId", true),
   ],
-  messages: [num("TicketId", true), text("MessageType"), text("Author"), text("AuthorEmail"), note("Body"), date("SentAt"), text("Source"), text("InternetMessageId", true)],
+  messages: [num("TicketId", true), text("MessageType"), text("AuthorName"), text("AuthorEmail"), note("Body"), date("SentAt"), text("Source"), text("InternetMessageId", true)],
   events: [num("TicketId", true), text("EventText"), text("Actor"), bool("IsPublic"), date("OccurredAt"), text("RequesterEmail", true)],
   settings: [note("Value")],
 };
@@ -28,7 +28,9 @@ const DEFAULT_SETTINGS = {
 
 async function main() {
   const siteId = await getSiteId();
-  console.log(`Site found: ${siteId}`);
+  const site = await graph(`/sites/${siteId}?$select=webUrl,displayName`);
+  console.log(`Site found: ${site.displayName} (${site.webUrl})`);
+  console.log(`Site ID:    ${siteId}\n`);
   for (const [key, columns] of Object.entries(SCHEMA)) {
     const name = LISTS[key];
     const found = await graph(`/sites/${siteId}/lists?$filter=${encodeURIComponent(`displayName eq '${q(name)}'`)}&$select=id`);
