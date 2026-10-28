@@ -1,13 +1,15 @@
-// All /api/* requests from the browser.
+// All /api/* requests from the browser. Every change is recorded in the activity log.
 import { env } from "../../lib/graph.mjs";
 import { healthCheck } from "../../lib/health.mjs";
 import { authenticate, requireAgent, requireAdmin, httpError } from "../../lib/auth.mjs";
 import {
-  getSettings, saveSettings, publicSettings, logoUrl, listTickets, listMine, getDetail,
-  createTicket, updateTicket, addMessage, deleteTicket,
+  getSettings, saveSettings, publicSettings, logoUrl, listTickets, listMine, getDetail, getTicket,
+  createTicket, updateTicket, addMessage, deleteTicket, addTicketEvent,
 } from "../../lib/tickets.mjs";
 import { decodeLogo, uploadLogo, downloadLogo, deleteLogoFiles, searchDirectory } from "../../lib/brand.mjs";
 import { pollInbox } from "../../lib/inbox.mjs";
+import { audit, listAudit, requestInfo } from "../../lib/audit.mjs";
+import { verifyFeedbackToken, saveFeedback, getFeedback, listFeedback, RATINGS } from "../../lib/feedback.mjs";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -16,11 +18,43 @@ async function readBody(req) {
   try { return await req.json(); } catch { throw httpError(400, "The request body wasn’t valid JSON."); }
 }
 
-export default async (req) => {
+function settingsDiff(before, after) {
+  const d = {};
+  if (after.users) {
+    const b = new Map(before.users.map((u) => [u.email, u])), a = new Map(after.users.map((u) => [u.email, u]));
+    const added = [...a.values()].filter((u) => !b.has(u.email)).map((u) => `${u.name} <${u.email}> as ${u.role}`);
+    const removed = [...b.values()].filter((u) => !a.has(u.email)).map((u) => `${u.name} <${u.email}>`);
+    const changed = [...a.values()].filter((u) => b.has(u.email) && b.get(u.email).role !== u.role).map((u) => `${u.name}: ${b.get(u.email).role} → ${u.role}`);
+    if (added.length) d.usersAdded = added;
+    if (removed.length) d.usersRemoved = removed;
+    if (changed.length) d.roleChanges = changed;
+  }
+  if (after.departments) {
+    const added = after.departments.filter((x) => !before.departments.includes(x));
+    const removed = before.departments.filter((x) => !after.departments.includes(x));
+    if (added.length) d.departmentsAdded = added;
+    if (removed.length) d.departmentsRemoved = removed;
+  }
+  if (after.sla && JSON.stringify(after.sla) !== JSON.stringify(before.sla)) d.sla = { before: before.sla, after: after.sla };
+  return d;
+}
+function summarise(d) {
+  const parts = [];
+  if (d.usersAdded) parts.push(`added ${d.usersAdded.length} user${d.usersAdded.length > 1 ? "s" : ""}`);
+  if (d.usersRemoved) parts.push(`removed ${d.usersRemoved.length} user${d.usersRemoved.length > 1 ? "s" : ""}`);
+  if (d.roleChanges) parts.push("changed user roles");
+  if (d.departmentsAdded || d.departmentsRemoved) parts.push("changed departments");
+  if (d.sla) parts.push("changed the SLA policy");
+  return parts.length ? parts.join(", ") : "saved settings without changes";
+}
+
+export default async (req, context) => {
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/api/, "") || "/";
   const method = req.method;
+  const info = requestInfo(req, context);
   try {
+    /* ---------- public ---------- */
     if (path === "/config" && method === "GET") {
       let logo = "";
       try { logo = logoUrl(await getSettings()); } catch { /* lists may not exist yet */ }
@@ -29,8 +63,10 @@ export default async (req) => {
         orgName: process.env.ORG_NAME || "InfraCredit", supportEmail: env("SUPPORT_MAILBOX"), logoUrl: logo,
       });
     }
-
-    // The logo is public: it appears on the sign-in page and in emails.
+    if (path === "/health" && method === "GET") {
+      const r = await healthCheck();
+      return json(r, r.ok ? 200 : 500);
+    }
     if (path === "/brand/logo" && method === "GET") {
       const s = await getSettings();
       const buf = s.branding.logoVersion ? await downloadLogo(s.branding.logoExt) : null;
@@ -43,19 +79,35 @@ export default async (req) => {
         },
       });
     }
-
-    if (path === "/health" && method === "GET") {
-      const r = await healthCheck();
-      return json(r, r.ok ? 200 : 500);
+    // Feedback links in emails work without signing in; the signed link proves who it's for.
+    if (path === "/feedback" && method === "GET") {
+      const p = verifyFeedbackToken(url.searchParams.get("t"));
+      const t = await getTicket(p.id);
+      if (!t || t.number !== p.n) throw httpError(404, "This ticket no longer exists.");
+      const fb = await getFeedback(t.id);
+      return json({ number: t.number, subject: t.subject, status: t.status, name: (t.requesterName || "").split(" ")[0], rating: fb?.rating || null, comment: fb?.comment || "", ratings: RATINGS, orgName: process.env.ORG_NAME || "InfraCredit", logoUrl: logoUrl(await getSettings()) });
+    }
+    if (path === "/feedback" && method === "POST") {
+      const b = await readBody(req);
+      const p = verifyFeedbackToken(b.t);
+      const t = await getTicket(p.id);
+      if (!t || t.number !== p.n) throw httpError(404, "This ticket no longer exists.");
+      const fb = await saveFeedback(t, { rating: b.rating, comment: b.comment, via: "Email link" });
+      await addTicketEvent(t, `Requester rated the support ${fb.rating}/5 (${fb.label})${fb.comment ? " with a comment" : ""}`, t.requesterName || p.e, false);
+      await audit({ name: t.requesterName, email: p.e }, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${t.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: t.number, details: { rating: fb.rating, comment: fb.comment, via: "Email link" }, info });
+      return json({ ok: true, rating: fb.rating });
     }
 
+    /* ---------- signed in ---------- */
     const user = await authenticate(req);
 
-    if (path === "/me" && method === "GET") return json(user);
+    if (path === "/me" && method === "GET") {
+      await audit(user, "Signed in to the service desk", { category: "Access", details: { role: user.isAdmin ? "Admin" : user.isAgent ? "Agent" : "Staff" }, info });
+      return json(user);
+    }
 
     if (path === "/settings" && method === "GET") {
-      const s = await getSettings();
-      const pub = publicSettings(s);
+      const pub = publicSettings(await getSettings());
       return json(user.isAgent ? pub : { departments: pub.departments, logoUrl: pub.logoUrl });
     }
     if (path === "/settings" && method === "PUT") {
@@ -63,18 +115,26 @@ export default async (req) => {
       const b = await readBody(req);
       const input = {};
       for (const k of ["departments", "users", "sla"]) if (k in b) input[k] = b[k];
-      return json(await saveSettings(input));
+      const before = await getSettings(true);
+      const after = await saveSettings(input);
+      const diff = settingsDiff(before, Object.fromEntries(Object.keys(input).map((k) => [k, after[k]])));
+      await audit(user, `Settings: ${summarise(diff)}`, { category: "Settings", targetType: "Settings", targetId: Object.keys(input).join(","), details: diff, info });
+      return json(after);
     }
     if (path === "/brand/logo" && method === "PUT") {
       requireAdmin(user);
       const logo = decodeLogo((await readBody(req)).dataUrl);
       await uploadLogo(logo);
-      return json(await saveSettings({ branding: { logoVersion: Date.now(), logoExt: logo.ext } }));
+      const r = await saveSettings({ branding: { logoVersion: Date.now(), logoExt: logo.ext } });
+      await audit(user, "Uploaded a new logo", { category: "Settings", targetType: "Branding", details: { type: logo.type, bytes: logo.buf.length }, info });
+      return json(r);
     }
     if (path === "/brand/logo" && method === "DELETE") {
       requireAdmin(user);
       await deleteLogoFiles();
-      return json(await saveSettings({ branding: { logoVersion: 0, logoExt: "png" } }));
+      const r = await saveSettings({ branding: { logoVersion: 0, logoExt: "png" } });
+      await audit(user, "Removed the logo", { category: "Settings", targetType: "Branding", info });
+      return json(r);
     }
     if (path === "/directory" && method === "GET") {
       requireAdmin(user);
@@ -87,40 +147,91 @@ export default async (req) => {
     }
     if (path === "/tickets" && method === "POST") {
       const b = await readBody(req);
+      let t;
       if (user.isAgent && b.mode === "agent") {
-        const t = await createTicket(b, user, { channel: b.channel });
-        return json(await getDetail(t.id, user), 201);
+        t = await createTicket(b, user, { channel: b.channel });
+      } else {
+        t = await createTicket(
+          { subject: b.subject, description: b.description, name: b.name || user.name, email: user.email, phone: b.phone, department: b.department, priority: b.priority },
+          user, { channel: "Self-service portal" },
+        );
       }
-      // Self-service portal: the requester is always the signed-in person.
-      const t = await createTicket(
-        { subject: b.subject, description: b.description, name: b.name || user.name, email: user.email, phone: b.phone, department: b.department, priority: b.priority },
-        user, { channel: "Self-service portal" },
-      );
-      return json(await getDetail(t.id, { ...user, isAgent: false }), 201);
+      await audit(user, `Created ticket #${t.number}`, { category: "Ticket", targetType: "Ticket", targetId: t.number, details: { subject: t.subject, channel: t.channel, priority: t.priority, requester: t.requesterEmail || t.requesterName, assignee: t.assigneeEmail || null }, info });
+      return json(await getDetail(t.id, user.isAgent && b.mode === "agent" ? user : { ...user, isAgent: false }), 201);
     }
 
     if (path === "/my/tickets" && method === "GET") return json(await listMine(user.email));
 
-    const m = path.match(/^\/tickets\/(\d+)(\/messages)?$/);
+    const m = path.match(/^\/tickets\/(\d+)(\/messages|\/feedback)?$/);
     if (m) {
       const id = Number(m[1]);
       if (!m[2] && method === "GET") return json(await getDetail(id, user));
-      if (!m[2] && method === "PATCH") { requireAgent(user); return json(await updateTicket(id, await readBody(req), user)); }
-      if (!m[2] && method === "DELETE") { requireAgent(user); await deleteTicket(id); return json({ ok: true }); }
-      if (m[2] && method === "POST") {
+      if (!m[2] && method === "PATCH") {
+        requireAgent(user);
+        const before = await getTicket(id);
+        if (!before) throw httpError(404, "That ticket no longer exists.");
+        const patch = await readBody(req);
+        const d = await updateTicket(id, patch, user);
+        const changes = {};
+        for (const [k, v] of Object.entries(patch)) {
+          const old = before[k];
+          if (JSON.stringify(old) !== JSON.stringify(v)) changes[k] = { from: old ?? null, to: v };
+        }
+        if (Object.keys(changes).length) await audit(user, `Updated ticket #${before.number}: ${Object.keys(changes).join(", ")}`, { category: "Ticket", targetType: "Ticket", targetId: before.number, details: changes, info });
+        return json(d);
+      }
+      if (!m[2] && method === "DELETE") {
+        requireAgent(user);
+        const r = await deleteTicket(id);
+        if (r) await audit(user, `Deleted ticket #${r.ticket.number}`, { category: "Ticket", targetType: "Ticket", targetId: r.ticket.number, details: { subject: r.ticket.subject, requester: r.ticket.requesterEmail, status: r.ticket.status, messagesDeleted: r.messages, eventsDeleted: r.events }, info });
+        return json({ ok: true });
+      }
+      if (m[2] === "/messages" && method === "POST") {
         const b = await readBody(req);
         if (b.type === "customer") {
-          await getDetail(id, { ...user, isAgent: false }); // the requester can only reply to their own ticket
-          return json(await addMessage(id, { type: "customer", body: b.body }, { ...user, isAgent: false }, { source: "portal" }));
+          const pre = await getDetail(id, { ...user, isAgent: false }); // the requester can only reply to their own ticket
+          const d = await addMessage(id, { type: "customer", body: b.body }, { ...user, isAgent: false }, { source: "portal" });
+          await audit(user, `Replied to their ticket #${pre.ticket.number} in the portal`, { category: "Ticket", targetType: "Ticket", targetId: pre.ticket.number, details: { characters: String(b.body || "").length }, info });
+          return json(d);
         }
         requireAgent(user);
-        return json(await addMessage(id, { type: b.type, body: b.body, closeAfter: !!b.closeAfter }, user));
+        const d = await addMessage(id, { type: b.type, body: b.body, closeAfter: !!b.closeAfter }, user);
+        await audit(user, `${b.type === "note" ? "Added an internal note to" : b.closeAfter ? "Replied to and closed" : "Replied to"} ticket #${d.ticket.number}`, { category: "Ticket", targetType: "Ticket", targetId: d.ticket.number, details: { type: b.type, characters: String(b.body || "").length, emailedTo: b.type === "reply" ? d.ticket.requesterEmail || null : null }, info });
+        return json(d);
+      }
+      if (m[2] === "/feedback" && method === "POST") {
+        const pre = await getDetail(id, { ...user, isAgent: false });
+        const b = await readBody(req);
+        const fb = await saveFeedback(pre.ticket, { rating: b.rating, comment: b.comment, via: "Portal" });
+        await addTicketEvent(pre.ticket, `Requester rated the support ${fb.rating}/5 (${fb.label})${fb.comment ? " with a comment" : ""}`, user.name, false);
+        await audit(user, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${pre.ticket.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: pre.ticket.number, details: { rating: fb.rating, comment: fb.comment, via: "Portal" }, info });
+        return json(await getDetail(id, { ...user, isAgent: false }));
       }
     }
 
+    if (path === "/feedback/recent" && method === "GET") {
+      requireAgent(user);
+      return json((await listFeedback()).sort((a, b) => b.at - a.at).slice(0, 200));
+    }
     if (path === "/mail/check" && method === "POST") {
       requireAgent(user);
-      return json(await pollInbox({ max: 8 }));
+      const r = await pollInbox({ max: 8 });
+      await audit(user, `Checked the support mailbox: ${r.created} new tickets, ${r.replies} replies`, { category: "Email", details: r, info });
+      return json(r);
+    }
+    if (path === "/audit" && method === "GET") {
+      requireAdmin(user);
+      return json(await listAudit({ from: url.searchParams.get("from"), to: url.searchParams.get("to"), category: url.searchParams.get("category") || "" }));
+    }
+    if (path === "/audit/export" && method === "POST") {
+      requireAdmin(user);
+      const b = await readBody(req);
+      await audit(user, `Exported the activity log (${Number(b.rows) || 0} entries)`, { category: "Audit", details: { from: b.from, to: b.to, filter: b.filter || "", rows: b.rows }, info });
+      return json({ ok: true });
+    }
+    if (path === "/backups" && method === "GET") {
+      requireAdmin(user);
+      return json(await listAudit({ from: Date.now() - 400 * 864e5, category: "Backup" }));
     }
 
     return json({ error: "Not found" }, 404);

@@ -2,23 +2,7 @@
 // Usage: npm run setup   (reads settings from .env)
 import { graph } from "../lib/graph.mjs";
 import { getSiteId, LISTS, q } from "../lib/lists.mjs";
-
-const text = (name, indexed = false) => ({ name, text: {}, indexed });
-const note = (name) => ({ name, text: { allowMultipleLines: true, textType: "plain", linesForEditing: 6 } });
-const num = (name, indexed = false) => ({ name, number: { decimalPlaces: "none" }, indexed });
-const date = (name) => ({ name, dateTime: { format: "dateTime" } });
-const bool = (name) => ({ name, boolean: {} });
-
-const SCHEMA = {
-  tickets: [
-    num("TicketNumber", true), note("Description"), text("Status", true), text("Priority"), text("Department"), text("Channel"),
-    text("AssigneeName"), text("AssigneeEmail", true), text("RequesterName"), text("RequesterEmail", true), text("RequesterPhone"),
-    text("Tags"), date("DueAt"), date("FirstResponseAt"), date("ClosedAt"), date("HoldAt"), date("LastActivityAt"), text("SourceMessageId", true),
-  ],
-  messages: [num("TicketId", true), text("MessageType"), text("AuthorName"), text("AuthorEmail"), note("Body"), date("SentAt"), text("Source"), text("InternetMessageId", true)],
-  events: [num("TicketId", true), text("EventText"), text("Actor"), bool("IsPublic"), date("OccurredAt"), text("RequesterEmail", true)],
-  settings: [note("Value")],
-};
+import { SCHEMA } from "../lib/schema.mjs";
 
 const DEFAULT_SETTINGS = {
   departments: ["General", "IT support", "Finance", "Admin"],

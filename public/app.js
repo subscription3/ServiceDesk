@@ -13,6 +13,7 @@ const S = {
   cmode: "reply", dtab: "conversation", drafts: {}, sending: false,
   my: [], myEvents: [], myDetails: {}, ptab: "new", psel: null, pconfirm: null, bellOpen: false,
   pform: {}, preply: {}, perr: "", psending: false, seen: loadSeen(),
+  prate: {}, prComment: {}, prEdit: {}, recentFb: null, fbLoading: false, af: null, auditRows: null, auditLoading: false, backups: null, backupsLoading: false,
   stab: "users", uq: "", dir: [], dirAvailable: null, unew: { name: "", email: "", role: "Agent" }, slaDraft: null, uploading: false, mailChecking: false,
   logoOk: false, navOpen: false, searchOpen: false, userMenu: false,
 };
@@ -168,6 +169,8 @@ function logoHTML(product) {
   const mark = src ? `<img src="${esc(src)}" alt="${esc(org)}">` : `<span class="wordmark">${esc(org)}</span>`;
   return mark + (product === false ? "" : `<span class="product">Service Desk</span>`);
 }
+function stars(n) { n = Math.round(Number(n) || 0); return `<span class="stars" aria-label="${n} out of 5">${"★".repeat(n)}<span class="off">${"★".repeat(5 - n)}</span></span>`; }
+const RATING_LABELS = { 1: "Very dissatisfied", 2: "Dissatisfied", 3: "Neutral", 4: "Satisfied", 5: "Very satisfied" };
 function badge(status) { return `<span class="badge ${sk(status)}">${esc(status)}</span>`; }
 function prio(p) { return `<span class="prio p-${esc(p)}"><i></i>${esc(p)}</span>`; }
 function slaCell(t) {
@@ -356,6 +359,7 @@ function renderDetail(t) {
           <dl class="kv">${t.requesterEmail ? `<dt>Email</dt><dd><a href="mailto:${esc(t.requesterEmail)}">${esc(t.requesterEmail)}</a></dd>` : ""}${t.requesterPhone ? `<dt>Phone</dt><dd>${esc(t.requesterPhone)}</dd>` : ""}<dt>Tickets</dt><dd><button class="btn sm" data-contact="${esc(contactKey(t))}">View all ${S.tickets.filter(x => contactKey(x) === contactKey(t)).length}</button></dd></dl>
           ${t.requesterEmail ? `<div class="notice" style="margin:14px 0 0">${ico("mail")}<span>The requester is emailed when you reply or change the status.</span></div>` : ""}
         </section>
+        ${d && d.feedback ? `<section><h3>Requester feedback</h3><div class="csat-card"><div class="big">${stars(d.feedback.rating)} ${d.feedback.rating}/5</div><div class="c-muted" style="font-size:13px">${esc(d.feedback.label)}, ${fmt(d.feedback.at)} via ${esc(d.feedback.via.toLowerCase())}</div>${d.feedback.comment ? `<blockquote>${esc(d.feedback.comment)}</blockquote>` : ""}</div></section>` : t.status === "Closed" && t.requesterEmail ? `<section><h3>Requester feedback</h3><p class="c-muted" style="margin:0;font-size:13px">Not rated yet. The requester was sent a one-click rating in the closing email.</p></section>` : ""}
         <section><button class="btn danger sm" data-act="delete">Delete ticket</button></section>
       </aside>
     </div></div>`;
@@ -382,6 +386,11 @@ function renderDash(counts) {
   const avg = resp.length ? dur(resp.reduce((a, b) => a + b, 0) / resp.length) : "—";
   const closedAll = S.tickets.filter(t => t.status === "Closed" && t.closedAt && t.dueAt);
   const met = closedAll.length ? Math.round(100 * closedAll.filter(t => t.closedAt <= t.dueAt).length / closedAll.length) + "%" : "—";
+  const rated = S.tickets.filter(t => t.rating);
+  const csat = rated.length ? Math.round(100 * rated.filter(t => t.rating >= 4).length / rated.length) + "%" : "—";
+  const avgRating = rated.length ? (rated.reduce((a, t) => a + t.rating, 0) / rated.length).toFixed(1) : "—";
+  if (!S.recentFb && !S.fbLoading) { S.fbLoading = true; api("GET", "/feedback/recent").then(r => { S.recentFb = r; S.fbLoading = false; render(); }).catch(() => { S.fbLoading = false; S.recentFb = []; }); }
+  const fbItems = (S.recentFb || []).slice(0, 6);
   const fr = S.tickets.filter(t => t.firstResponseAt && t.firstResponseDueAt);
   const frMet = fr.length ? Math.round(100 * fr.filter(t => t.firstResponseAt <= t.firstResponseDueAt).length / fr.length) + "%" : "—";
   const bs = {}, ba = {}, bc = {}, bp = {};
@@ -399,12 +408,14 @@ function renderDash(counts) {
       <button class="kpi" data-view="closed"><div class="l">Closed this week</div><div class="v">${closedWeek}</div></button>
       <div class="kpi"><div class="l">First response within target</div><div class="v">${frMet}</div></div>
       <div class="kpi"><div class="l">Resolved within target</div><div class="v">${met}</div></div>
+      <div class="kpi"><div class="l">Customer satisfaction (CSAT)</div><div class="v">${csat}</div><div class="c-muted" style="font-size:12.5px;margin-top:4px">${rated.length ? `${rated.length} ratings, average ${avgRating}/5` : "No ratings yet"}</div></div>
     </div>
     <div class="grid2">
       <section class="card panel"><h2>Open tickets by status</h2>${bars(bs)}</section>
       <section class="card panel"><h2>Open tickets by agent</h2>${bars(ba)}</section>
       <section class="card panel"><h2>Open tickets by priority</h2>${bars(bp)}</section>
       <section class="card panel"><h2>All tickets by channel</h2>${bars(bc)}</section>
+      <section class="card panel"><h2>Latest feedback</h2>${fbItems.length ? `<ul class="fb-list">${fbItems.map(f => `<li><div>${stars(f.rating)} <b>${esc(RATING_LABELS[f.rating])}</b></div><div class="meta"><span>Ticket #${f.number}</span><span>${esc(f.assigneeName || "Unassigned")}</span><span>${ago(f.at)}</span></div>${f.comment ? `<blockquote>“${esc(f.comment)}”</blockquote>` : ""}</li>`).join("")}</ul>` : `<p class="c-muted" style="margin:0">Ratings appear here after requesters respond to the closing email.</p>`}</section>
     </div></div>`;
 }
 function renderContacts() {
@@ -457,6 +468,14 @@ function renderPortalBody(inDesk) {
     </div>
     ${panel}${body}`;
 }
+function portalRating(id, fb) {
+  const r = S.prate[id] ?? (fb ? fb.rating : 0);
+  if (fb && !S.prEdit[id]) return `<section class="p-section"><h3>Your feedback</h3><div class="csat-card"><div class="big">${stars(fb.rating)} ${esc(RATING_LABELS[fb.rating])}</div>${fb.comment ? `<blockquote>${esc(fb.comment)}</blockquote>` : ""}<div style="margin-top:10px"><button class="btn sm" data-act="prchange" data-id="${id}">Change my rating</button></div></div></section>`;
+  return `<section class="p-section card" style="padding:18px;box-shadow:none"><h3 style="margin-bottom:4px">How did we do?</h3><p class="c-muted" style="margin:0 0 12px">Rate the support you received on this request.</p>
+    <fieldset class="rating"><legend class="sr">Your rating</legend><div class="rating-row">${[1, 2, 3, 4, 5].map(n => `<label><input type="radio" name="pr-${id}" value="${n}" data-prate="${id}" ${r === n ? "checked" : ""}><span><b>${n}</b>${RATING_LABELS[n]}</span></label>`).join("")}</div></fieldset>
+    <div class="field"><label for="prc-${id}">Anything you’d like to add? (optional)</label><textarea id="prc-${id}" data-prcomment="${id}" rows="3" maxlength="4000">${esc(S.prComment[id] ?? (fb ? fb.comment : ""))}</textarea></div>
+    <div class="c-actions"><button class="btn primary" data-act="prsend" data-id="${id}" ${r ? "" : "disabled"}>Send feedback</button></div></section>`;
+}
 function pv(k) { return esc(S.pform[k] || ""); }
 function portalForm() {
   const pr = S.pform.priority || "Medium", dep = S.pform.department || S.settings.departments[0];
@@ -483,7 +502,7 @@ function portalConfirm(t) {
 function portalList(items) {
   if (!items.length) return `<div class="card empty"><h3>No requests yet</h3><p>Requests you raise here or by email will appear in this list.</p><button class="btn primary" data-ptab="new">Raise a request</button></div>`;
   return `<div class="card req-list">${items.map(t => { const u = unreadFor(t.id); return `<button class="req" data-popen="${t.id}">
-    <b>${u ? `<i class="newdot" aria-label="${u} new updates"></i>` : ""}${esc(t.subject)}</b>${badge(t.status)}
+    <b>${u ? `<i class="newdot" aria-label="${u} new updates"></i>` : ""}${esc(t.subject)}</b><span class="dh-badges">${t.status === "Closed" ? (t.rating ? stars(t.rating) : `<span class="badge s-On-hold" style="background:var(--amber-100)">Rate this</span>`) : ""}${badge(t.status)}</span>
     <span class="r-meta"><span>Ticket #${t.number}</span><span>${esc(t.department)}</span><span>Raised ${ago(t.createdAt)}</span><span>Updated ${ago(t.updatedAt)}</span></span></button>`; }).join("")}</div>`;
 }
 function portalDetail(id) {
@@ -504,6 +523,7 @@ function portalDetail(id) {
       <textarea id="pr-${id}" data-preply="${id}">${esc(S.preply[id] || "")}</textarea>
       <div class="c-actions"><button class="btn primary" data-act="preply" data-id="${id}">Send reply</button></div>
     </div></section>
+    ${st === "Closed" && d ? portalRating(id, d.feedback) : ""}
     <section class="p-section"><h3>Updates</h3><ul class="timeline">${d ? [...d.events].reverse().map(e => `<li><time>${fmt(e.at)}</time>${esc(e.text)}</li>`).join("") : ""}</ul></section>
   </article>`;
 }
@@ -544,6 +564,12 @@ root.addEventListener("click", async e => {
   else if (a === "pnew") { S.pconfirm = null; render(); document.getElementById("pf-subject")?.focus(); }
   else if (a === "pback") { S.psel = null; render(); }
   else if (a === "preply") { el.disabled = true; await requesterReply(Number(el.dataset.id)); }
+  else if (a === "prchange") { S.prEdit[Number(el.dataset.id)] = true; render(); }
+  else if (a === "prsend") {
+    const id = Number(el.dataset.id); el.disabled = true;
+    try { S.myDetails[id] = await api("POST", `/tickets/${id}/feedback`, { rating: S.prate[id] ?? S.myDetails[id]?.feedback?.rating, comment: S.prComment[id] ?? S.myDetails[id]?.feedback?.comment ?? "" }); S.prEdit[id] = false; delete S.prate[id]; delete S.prComment[id]; toast("Thank you for your feedback"); loadMine().then(render).catch(() => { }); } catch (e2) { }
+    render();
+  }
   else if (a === "delete") {
     const t = S.tickets.find(x => x.id === S.selected);
     if (t && confirm(`Delete ticket #${t.number}? This removes it and its conversation from SharePoint and can’t be undone.`)) {
@@ -566,10 +592,12 @@ root.addEventListener("input", e => {
   if (t.id === "cBody" && S.selected) S.drafts[S.selected] = t.value;
   if (t.dataset.pf) S.pform[t.dataset.pf] = t.value;
   if (t.dataset.preply) S.preply[t.dataset.preply] = t.value;
+  if (t.dataset.prcomment) S.prComment[t.dataset.prcomment] = t.value;
 });
 root.addEventListener("change", async e => {
   const el = e.target;
   if (el.dataset.pf) { S.pform[el.dataset.pf] = el.value; return; }
+  if (el.dataset.prate) { S.prate[Number(el.dataset.prate)] = Number(el.value); render(); return; }
   if (el.id === "sortSel") { S.sort = el.value; render(); return; }
   if (el.id === "bAssign" && el.value !== "__") { const v = el.value, ids = [...S.checked]; for (const id of ids) await setField(id, "assigneeEmail", v); toast(`${ids.length} tickets updated`); S.checked.clear(); render(); return; }
   if (el.id === "bStatus" && el.value) { const v = el.value, ids = [...S.checked]; for (const id of ids) await setField(id, "status", v); toast(`${ids.length} tickets set to ${v}`); S.checked.clear(); render(); return; }
@@ -632,8 +660,8 @@ function addBusinessTime(startMs, hours, sla) {
 function slaDraft() { if (!S.slaDraft) S.slaDraft = JSON.parse(JSON.stringify(S.settings.sla)); return S.slaDraft; }
 function renderSettingsPage() {
   if (!S.user.isAdmin) return `<div class="page"><div class="card empty"><h3>Admins only</h3><p>Ask a service desk admin to change settings.</p></div></div>`;
-  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["branding", "Branding", "edit"], ["email", "Email", "mail"]];
-  const body = { users: setUsers, sla: setSla, departments: setDepartments, branding: setBranding, email: setEmail }[S.stab] || setUsers;
+  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["branding", "Branding", "edit"], ["email", "Email", "mail"], ["audit", "Activity log", "shield"], ["backups", "Backups", "refresh"]];
+  const body = { users: setUsers, sla: setSla, departments: setDepartments, branding: setBranding, email: setEmail, audit: setAudit, backups: setBackups }[S.stab] || setUsers;
   return `<div class="page">
     <div class="page-head"><div><h1>Settings</h1><p>Manage who works on the desk, response targets and how the desk looks.</p></div></div>
     <div class="settings-layout">
@@ -732,6 +760,81 @@ function setEmail() {
     <dl class="kv" style="max-width:560px"><dt>Mailbox</dt><dd><b>${esc(S.cfg.supportEmail)}</b></dd><dt>Checked</dt><dd>Every 5 minutes</dd><dt>Requesters get</dt><dd>Confirmation, replies, status changes and resolution</dd><dt>Agents get</dt><dd>New assignments and requester replies</dd></dl>
     <div style="margin-top:18px"><button class="btn" data-act="mailcheck" ${S.mailChecking ? "disabled" : ""}>${ico("refresh")}${S.mailChecking ? "Checking…" : "Check mailbox now"}</button></div></section>`;
 }
+/* ---------- activity log & backups (admin) ---------- */
+const AUDIT_CATS = ["Access", "Ticket", "Email", "Feedback", "Settings", "Backup", "Audit"];
+function dayStart(s) { return new Date(s + "T00:00:00").getTime(); }
+function isoDay(t) { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function auditFilters() { if (!S.af) S.af = { from: isoDay(Date.now() - 6 * 864e5), to: isoDay(Date.now()), cat: "", q: "" }; return S.af; }
+async function loadAudit() {
+  const f = auditFilters(); S.auditLoading = true; render();
+  try { S.auditRows = await api("GET", `/audit?from=${dayStart(f.from)}&to=${dayStart(f.to) + 864e5 - 1}`); } catch (e) { S.auditRows = []; }
+  S.auditLoading = false; render();
+}
+function auditVisible() {
+  const f = auditFilters(); const q = f.q.trim().toLowerCase();
+  return (S.auditRows || []).filter(r => (!f.cat || r.category === f.cat) && (!q || [r.action, r.actorName, r.actorEmail, r.targetId, r.details, r.ip].join(" ").toLowerCase().includes(q)));
+}
+function prettyDetails(d) { try { return JSON.stringify(JSON.parse(d), null, 2); } catch (e) { return d; } }
+function setAudit() {
+  const f = auditFilters(); const rows = auditVisible();
+  if (!S.auditRows && !S.auditLoading) setTimeout(loadAudit, 0);
+  return `<section class="card section-card"><h2>Activity log</h2><p>Every sign-in, ticket change, reply, rating, settings change and backup, with who did it, when and from where. Entries can’t be edited or deleted from the desk.</p>
+    <div class="filters">
+      <div class="field"><label for="afFrom">From</label><input type="date" id="afFrom" data-af="from" value="${f.from}"></div>
+      <div class="field"><label for="afTo">To</label><input type="date" id="afTo" data-af="to" value="${f.to}"></div>
+      <div class="field"><label for="afCat">Category</label><select id="afCat" data-af="cat"><option value="">All activity</option>${AUDIT_CATS.map(c => `<option${c === f.cat ? " selected" : ""}>${c}</option>`).join("")}</select></div>
+      <div class="field"><label for="afQ">Search</label><input type="search" id="afQ" data-af="q" value="${esc(f.q)}" placeholder="Person, ticket number, action"></div>
+      <button class="btn" data-act="logexport" ${rows.length ? "" : "disabled"}>${ico("up")}Export CSV</button>
+    </div>
+    <p class="c-muted" style="font-size:13px;margin:0 0 10px">${S.auditLoading ? "Loading…" : `${rows.length} ${rows.length === 1 ? "entry" : "entries"}`}</p>
+  </section>
+  <section class="card table-card" style="margin-top:12px">${rows.length ? `<table class="dtable log-table"><thead><tr><th>When</th><th>Who</th><th>Activity</th><th class="hide-md">Category</th><th class="hide-lg">IP address</th></tr></thead><tbody>
+    ${rows.slice(0, 1000).map(r => `<tr style="cursor:default"><td class="when">${fmt(r.at)}</td><td><b>${esc(r.actorName)}</b>${r.actorEmail ? `<br><span class="c-muted">${esc(r.actorEmail)}</span>` : ""}</td>
+      <td>${esc(r.action)}${r.details ? `<details><summary>Details</summary><pre>${esc(prettyDetails(r.details))}</pre></details>` : ""}</td>
+      <td class="hide-md"><span class="cat cat-${esc(r.category)}">${esc(r.category)}</span></td><td class="hide-lg c-muted">${esc(r.ip)}</td></tr>`).join("")}
+  </tbody></table>${rows.length > 1000 ? `<p class="c-muted" style="padding:12px">Showing the latest 1,000. Export to see all ${rows.length}.</p>` : ""}` : `<div class="empty"><h3>${S.auditLoading ? "Loading…" : "No activity in this period"}</h3><p>Try a wider date range or a different category.</p></div>`}</section>`;
+}
+function exportAudit() {
+  const rows = auditVisible(); const f = auditFilters();
+  const cell = v => { const s = v == null ? "" : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [["Time (UTC)", "Local time", "Person", "Email", "Category", "Activity", "Target", "IP address", "Device", "Details"].join(",")];
+  rows.forEach(r => lines.push([new Date(r.at).toISOString(), fmt(r.at), r.actorName, r.actorEmail, r.category, r.action, r.targetType ? `${r.targetType} ${r.targetId}` : "", r.ip, r.ua, r.details].map(cell).join(",")));
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `service-desk-activity-${f.from}-to-${f.to}.csv`; document.body.appendChild(a); a.click(); a.remove();
+  api("POST", "/audit/export", { from: f.from, to: f.to, filter: [f.cat, f.q].filter(Boolean).join(" "), rows: rows.length }).catch(() => { });
+  toast("Activity log exported. The export itself has been recorded in the log.");
+}
+async function loadBackups() { S.backupsLoading = true; render(); try { S.backups = await api("GET", "/backups"); } catch (e) { S.backups = []; } S.backupsLoading = false; render(); }
+function setBackups() {
+  if (!S.backups && !S.backupsLoading) setTimeout(loadBackups, 0);
+  const runs = (S.backups || []).map(b => { let d = {}; try { d = JSON.parse(b.details || "{}"); } catch (e) { } return { ...b, d }; });
+  const backupsOnly = runs.filter(r => r.targetType === "Backup");
+  const lastOk = backupsOnly.find(r => r.d.verified);
+  const age = lastOk ? Date.now() - lastOk.at : null;
+  const healthy = age != null && age < 36 * 36e5;
+  const restores = runs.filter(r => r.targetType === "Restore");
+  return `<div class="status-strip">
+      <div class="kpi ${healthy ? "" : "alert"}"><div class="l">Last verified backup</div><div class="v" style="font-size:20px">${lastOk ? ago(lastOk.at) : "None yet"}</div><div class="c-muted" style="font-size:13px;margin-top:4px">${lastOk ? fmt(lastOk.at) : "Set up the nightly backup (see below)"}</div></div>
+      <div class="kpi"><div class="l">Records in last backup</div><div class="v" style="font-size:20px">${lastOk ? (lastOk.d.records || 0).toLocaleString() : "—"}</div></div>
+      <div class="kpi"><div class="l">Backups in the last 30 days</div><div class="v" style="font-size:20px">${backupsOnly.filter(r => r.d.verified && Date.now() - r.at < 30 * 864e5).length}</div></div>
+      <div class="kpi"><div class="l">Last restore test</div><div class="v" style="font-size:20px">${restores[0] ? ago(restores[0].at) : "Never"}</div></div>
+    </div>
+    ${!healthy ? `<div class="err" role="alert">${lastOk ? "The last verified backup is more than a day old. Check the “Nightly backup” workflow in GitHub Actions." : "No verified backup has been recorded yet."}</div>` : ""}
+    <section class="card table-card">${runs.length ? `<table class="dtable log-table"><thead><tr><th>When</th><th>Result</th><th class="hide-sm">Records</th><th class="hide-md">Manifest SHA-256</th><th>Evidence</th></tr></thead><tbody>
+      ${runs.map(r => `<tr style="cursor:default"><td class="when">${fmt(r.at)}</td>
+        <td>${r.targetType === "Restore" ? `<span class="ok-txt">Restore test passed</span><br><span class="c-muted">Backup ${esc(r.targetId)}</span>` : r.d.verified ? `<span class="ok-txt">Completed and verified</span>` : `<span class="bad-txt">Failed</span>${r.d.error ? `<br><span class="c-muted">${esc(r.d.error)}</span>` : ""}`}<br><span class="c-muted">${esc(r.d.trigger || "")}</span></td>
+        <td class="hide-sm">${r.d.records != null ? r.d.records.toLocaleString() : r.d.counts ? Object.values(r.d.counts).reduce((a, b) => a + b, 0).toLocaleString() : "—"}</td>
+        <td class="hide-md"><span class="hash">${esc(r.d.manifestSha256 || r.d.backupManifestSha256 || "")}</span></td>
+        <td>${r.d.folderUrl ? `<a href="${esc(r.d.folderUrl)}" target="_blank" rel="noopener">Backup files</a><br>` : ""}${r.d.runUrl ? `<a href="${esc(r.d.runUrl)}" target="_blank" rel="noopener">Run log</a>` : ""}</td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty"><h3>${S.backupsLoading ? "Loading…" : "No backups recorded yet"}</h3><p>Backup runs appear here once the nightly backup is set up.</p></div>`}</section>
+    <section class="card section-card" style="margin-top:16px"><h2>How backups work</h2>
+      <ul class="steps-list">
+        <li>Every night at 02:00 (Lagos time), GitHub Actions copies every list (tickets, conversations, history, feedback, settings and this activity log) into the <b>ServiceDeskBackups</b> folder of your SharePoint site.</li>
+        <li>Each file gets a SHA-256 fingerprint. The backup then reads every file back and checks the fingerprints match before it’s marked as verified.</li>
+        <li>Each backup folder contains a <b>manifest</b> and an <b>evidence report</b> that auditors can check independently. GitHub keeps a second copy and an unchangeable run log.</li>
+        <li>To back up on demand, open GitHub → Actions → <b>Nightly backup</b> → Run workflow. To prove a restore works, run <b>Restore test</b> into an empty test site.</li>
+      </ul></section>`;
+}
 async function saveSettingsPart(part, msg) {
   try { const r = await api("PUT", "/settings", part); S.settings = { ...S.settings, ...r }; S.slaDraft = null; toast(msg || "Settings saved"); } catch (e) { }
   render();
@@ -745,8 +848,9 @@ async function runDirSearch() {
 function setPath(obj, path, val) { const k = path.split("."); let o = obj; for (let i = 0; i < k.length - 1; i++) o = o[k[i]]; o[k[k.length - 1]] = val; }
 root.addEventListener("click", async e => {
   const el = e.target.closest("[data-stab],[data-pick],[data-uremove],[data-dremove],[data-holremove],[data-act^='u'],[data-act^='sla'],[data-act^='hol'],[data-act^='dept'],[data-act^='logo'],[data-act='mailcheck']");
+  if (el && el.dataset.act === "logexport") { exportAudit(); return; }
   if (!el || !S.user || !S.user.isAdmin) return;
-  if (el.dataset.stab) { S.stab = el.dataset.stab; render(); return; }
+  if (el.dataset.stab) { S.stab = el.dataset.stab; if (S.stab === "audit") S.auditRows = null; if (S.stab === "backups") S.backups = null; render(); return; }
   if (el.dataset.pick != null) { const p = S.dir[Number(el.dataset.pick)]; S.unew = { ...S.unew, name: p.name, email: p.email }; S.uq = ""; S.dir = []; render(); document.getElementById("uRole")?.focus(); return; }
   const users = S.settings.users || [];
   if (el.dataset.uremove) {
@@ -800,6 +904,8 @@ root.addEventListener("change", async e => {
     S.uploading = false; render();
   }
 });
+root.addEventListener("change", e => { const t = e.target; if (!t.dataset.af || !S.user?.isAdmin) return; auditFilters()[t.dataset.af] = t.value; if (t.dataset.af === "from" || t.dataset.af === "to") loadAudit(); else render(); });
+root.addEventListener("input", e => { const t = e.target; if (t.dataset.af === "q") { auditFilters().q = t.value; render(); } });
 root.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "deptIn") { e.preventDefault(); document.querySelector('[data-act="deptadd"]')?.click(); } });
 
 /* ---------- start ---------- */
@@ -850,7 +956,7 @@ async function boot() {
   setInterval(async () => {
     if (document.hidden) return;
     try {
-      if (S.user.isAgent) { await loadAgent(); if (S.selected) S.details[S.selected] = await api("GET", "/tickets/" + S.selected); }
+      if (S.user.isAgent) { await loadAgent(); if (S.page === "dashboard") S.recentFb = await api("GET", "/feedback/recent"); if (S.selected) S.details[S.selected] = await api("GET", "/tickets/" + S.selected); }
       if (!S.user.isAgent || S.page === "portal") { await loadMine(); if (S.psel) S.myDetails[S.psel] = await api("GET", "/tickets/" + S.psel); }
       const a = document.activeElement;
       if (!(a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT" || a.tagName === "SELECT")) && !dlgNew.open) render();

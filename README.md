@@ -81,7 +81,7 @@ Go to **entra.microsoft.com** → **Applications** → **App registrations** →
    - `Sites.ReadWrite.All` (read and write the SharePoint lists)
    - `Mail.Send` (send notifications)
    - `Mail.ReadWrite` (read the support inbox and mark emails as processed)
-   - `Sites.Manage.All` (needed only so `npm run setup` can create the lists and columns; you can remove it afterwards)
+   - `Sites.Manage.All` (needed whenever `npm run setup` creates lists or columns, including after upgrades and on restore-test sites)
 
    Then select **Grant admin consent for InfraCredit**.
 8. Go to **Enterprise applications** → `InfraCredit Service Desk` → **Users and groups** → **Add user/group**. Choose your support agents, or better, a group such as `Service Desk Agents`, and give them the **Service Desk Agent** role.
@@ -187,11 +187,145 @@ Then open http://localhost:8888. The scheduled email check doesn't run locally, 
 
 ---
 
+## Settings (admins only)
+
+Open **Settings** in the side navigation. It has five sections:
+
+| Section | What you can do |
+|---|---|
+| **Users** | Add agents and admins, change roles, remove people. Search finds people in your Microsoft 365 directory. |
+| **SLA policy** | Set first-response and resolution targets per priority, the warning point (amber), business hours, time zone and public holidays. |
+| **Departments** | Add or remove the teams requests are routed to. |
+| **Branding** | Upload or replace the logo (PNG or JPG, under 1 MB). It's stored in the SharePoint site and appears in the top bar, on the sign-in page and in every email. |
+| **Email** | See the support mailbox details and check it for new emails right away. |
+
+### Who can do what
+
+| Role | Gets | How someone gets it |
+|---|---|---|
+| **Admin** | Agent desk plus Settings | Admin role in **Settings → Users**, or the `ServiceDesk.Admin` app role in Entra, or listed in the `ADMIN_EMAILS` environment variable |
+| **Agent** | Agent desk | Added in **Settings → Users**, or the `ServiceDesk.Agent` app role in Entra, or listed in `AGENT_EMAILS` |
+| **Staff** | Request portal | Anyone else in the organisation who signs in |
+
+**First-time setup:** until at least one admin has been added in Settings → Users, anyone with the `ServiceDesk.Agent` Entra role is treated as an admin. Add yourself as an admin first.
+
+### Optional: directory search when adding users
+
+To search the Microsoft 365 directory by name in Settings → Users, add one more permission:
+1. In Entra, open your app → **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions**.
+2. Tick **User.Read.All**, then select **Add permissions** → **Grant admin consent**.
+
+Without it, you can still add people by typing their name and email.
+
+### Fallback logo file
+
+If you'd rather ship the logo with the code, put `logo.png` in `public/brand/`. A logo uploaded in Settings takes priority.
+
+## Customer feedback (CSAT)
+
+When a ticket is closed, the requester's email includes **How did we do?** with five one-click ratings, from 1 (very dissatisfied) to 5 (very satisfied).
+- **Rating from the email.** Clicking a rating opens a short page where the requester can add a comment. It doesn't need a sign-in, because the link is signed and expires after 30 days.
+- **Rating in the portal.** Staff can also rate closed requests in the portal under **My requests**, and change their rating later.
+- **Where ratings show.** Agents see the rating on the ticket. The dashboard shows the **CSAT score** (the share of 4 and 5 ratings, the industry-standard measure), the average rating and the latest comments.
+
+Optional: set a `FEEDBACK_SECRET` environment variable in Netlify to any long random text. Otherwise the links are signed with a key derived from the app secret, and rotating the client secret will expire the links already sent.
+
+## Activity log (audit trail)
+
+**Settings → Activity log** records, with the person, time, IP address and device:
+- sign-ins
+- tickets created, updated (with old and new values), replied to, noted and deleted
+- emails turned into tickets or replies
+- ratings
+- every settings change (users added, removed or re-roled; SLA before and after; departments; logo)
+- mailbox checks, backups, restores, and exports of the log itself
+
+Admins can filter by date, category or person and **export to CSV**. The desk can only add entries, never edit or delete them. The log is stored in the `SD Audit Log` SharePoint list and included in every backup.
+
+## Backups and audit evidence
+
+### What protects the data
+
+| Layer | What it covers | Set up by |
+|---|---|---|
+| **Nightly backup** (this project) | All six lists, copied every night at 02:00 Lagos time into `ServiceDeskBackups/<date>` on the SharePoint site, then read back and verified | GitHub Actions, see below |
+| **Second copy in GitHub** | The same files, kept for 90 days as a private workflow artifact | Automatic with the nightly backup |
+| **SharePoint version history and recycle bin** | Earlier versions of every item, and deleted items for 93 days | On by default |
+| **Microsoft Purview retention policy** (recommended) | Stops anyone, including admins and the app, from permanently deleting backups or list data before the retention period ends | Microsoft 365 compliance admin |
+| **Code** | Every version of the application in GitHub, plus every deploy in Netlify (one-click rollback) | Already in place |
+
+### Set up the nightly backup (once)
+
+1. In GitHub, open the repository → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**. Add these five secrets, with the same values as in Netlify:
+   - `AZURE_TENANT_ID`
+   - `AZURE_CLIENT_ID`
+   - `AZURE_CLIENT_SECRET`
+   - `SHAREPOINT_HOSTNAME`
+   - `SHAREPOINT_SITE_PATH`
+2. Optionally, on the **Variables** tab:
+   - `BACKUP_RETENTION_DAYS`, e.g. `400`. Backups older than this are deleted. Leave it unset to keep every backup, and let your retention policy decide.
+   - `GITHUB_COPY_RETENTION_DAYS`, which defaults to 90.
+   - `KEEP_GITHUB_COPY` = `false`, if policy requires the data to stay only in Microsoft 365.
+3. Open **Actions** → **Nightly backup** → **Run workflow** to take the first backup now. It should finish with a green tick, and the backup appears in **Settings → Backups** in the desk.
+4. Make sure failure emails reach you: in GitHub, go to your profile → **Settings** → **Notifications** → **Actions**, and turn on notifications for failed workflows.
+
+### What auditors can be shown
+
+Each backup folder contains:
+- `manifest.json`: every file with its record count, size and **SHA-256 hash**, with confirmation that each file was read back from SharePoint and matched.
+- `evidence-report.html`: the same information in a readable report, with instructions for checking any file's hash independently (`certutil -hashfile <file> SHA256` on Windows).
+- The data itself as JSON, plus `tickets.csv` for opening in Excel.
+
+Further evidence:
+- **Activity log.** Each backup adds an entry to the activity log with the manifest hash, so a backup file that was changed afterwards can be detected.
+- **GitHub run history.** GitHub keeps the full run history and logs for every backup: the date, the result, who started it, and a summary with the hashes.
+- **Settings → Backups** shows the last verified backup, backups in the last 30 days, every run's result and hash, and the last restore test. It warns when no verified backup has run for over a day.
+
+### Prove that restore works (recommended every quarter)
+
+1. In SharePoint, create an empty test site, e.g. `/sites/ServiceDesk-RestoreTest`.
+2. In GitHub, open **Actions** → **Restore test** → **Run workflow**.
+3. Enter `latest` (or a backup ID such as `20261028-0100Z`) and the test site path.
+
+The workflow downloads the backup, checks every hash, creates the lists on the test site and restores everything. The restore keeps the original ticket numbers and dates and relinks conversations, history and feedback. It then records the result in the activity log and **Settings → Backups**. It refuses to run against the live site.
+
+### Restoring for real
+
+If the live data is lost or damaged:
+1. Create a new SharePoint site, or empty the lists.
+2. On your computer, run:
+   ```
+   npm run download-backup -- latest
+   ```
+   Or download a backup folder from SharePoint or GitHub into `restore-input/<backup ID>`.
+3. Point `SHAREPOINT_SITE_PATH` in `.env` at the new site, then run:
+   ```
+   npm run setup
+   npm run restore -- restore-input/<backup ID>
+   ```
+4. Update `SHAREPOINT_SITE_PATH` in Netlify (and in the GitHub secrets) and redeploy.
+
+The restore stops if any file fails its hash check, and it will only write into empty lists.
+
+### Recommended: a retention policy in Microsoft Purview
+
+Ask your Microsoft 365 compliance admin to create a retention policy for the service desk SharePoint site, for example **retain for 7 years**. It then covers:
+- the lists
+- the `ServiceDeskBackups` folder
+- the activity log
+
+With the policy in place, deleted or changed items are kept in the site's Preservation Hold library until the period ends. That's the evidence auditors usually ask for, because nobody can quietly delete records.
+
+### Data protection
+
+Backups contain personal data (names, emails and conversations), so treat them like the live desk under the NDPA (Nigeria Data Protection Act):
+- Keep the GitHub repository private.
+- Limit who can open the SharePoint site.
+- Set `KEEP_GITHUB_COPY` to `false` if your policy requires the data to stay only in Microsoft 365.
+
 ## Day to day
 
-**Adding a new agent** takes two steps:
-1. Give them the **Service Desk Agent** role in Entra, so they can open the desk.
-2. Add them in **Settings**, so tickets can be assigned to them.
+**Adding a new agent:** go to **Settings → Users**, find the person and add them as an Agent. They can open the desk the next time they sign in.
 
 **Client secret expiry.** When the secret nears expiry, create a new one in Entra, update `AZURE_CLIENT_SECRET` in Netlify and redeploy.
 
@@ -234,7 +368,17 @@ lib/
   tickets.mjs           Ticket rules, SLA and notifications
   mail.mjs              Email templates and sending
   inbox.mjs             Reading the support mailbox
+  audit.mjs             Activity log
+  feedback.mjs          Ratings and signed feedback links
+  sla.mjs               SLA targets, business hours and holidays
+  schema.mjs            Columns of every SharePoint list
 scripts/
   setup-sharepoint.mjs  Creates the SharePoint lists (npm run setup)
+  backup.mjs            Backs up, verifies and writes the evidence report (npm run backup)
+  download-backup.mjs   Downloads a backup from SharePoint (npm run download-backup -- latest)
+  restore.mjs           Restores a backup into empty lists (npm run restore -- <folder>)
+.github/workflows/
+  backup.yml            Nightly backup at 02:00 Lagos time, plus an on-demand button
+  restore-test.yml      Restore test into a separate site, for audit evidence
   copy-msal.mjs         Build step that bundles the Microsoft sign-in library
 ```
