@@ -221,12 +221,28 @@ Without it, you can still add people by typing their name and email.
 
 If you'd rather ship the logo with the code, put `logo.png` in `public/brand/`. A logo uploaded in Settings takes priority.
 
+## Reports
+
+**Reports** in the side navigation is available to every agent. Choose a period (last 7, 30 or 90 days, this or last month, this quarter, this year, or custom dates), a department and an agent.
+
+| Tab | What it shows |
+|---|---|
+| **Overview** | Tickets opened and resolved, open now, average first response, average time to resolve, SLA and CSAT, plus an opened-versus-resolved trend |
+| **SLA performance** | First-response and resolution compliance overall and by priority, a trend line, and every ticket that missed its target (click one to open it) |
+| **Agent performance** | Per agent: assigned, resolved, open now, average response and resolution times, within-target percentage, CSAT and average rating |
+| **Customer satisfaction** | CSAT score, average rating, response rate, the distribution of ratings, a trend line, and every comment (with a filter for low ratings) |
+| **Breakdown** | Tickets by department, channel, priority and status, plus top requesters and top tags |
+
+**Export to Excel** downloads every ticket in the period with its timings, SLA results and rating. **Print or save as PDF** prints the current tab. Exports are recorded in the activity log.
+
 ## Customer feedback (CSAT)
 
 When a ticket is closed, the requester's email includes **How did we do?** with five one-click ratings, from 1 (very dissatisfied) to 5 (very satisfied).
 - **Rating from the email.** Clicking a rating opens a short page where the requester can add a comment. It doesn't need a sign-in, because the link is signed and expires after 30 days.
 - **Rating in the portal.** Staff can also rate closed requests in the portal under **My requests**, and change their rating later.
 - **Where ratings show.** Agents see the rating on the ticket. The dashboard shows the **CSAT score** (the share of 4 and 5 ratings, the industry-standard measure), the average rating and the latest comments.
+
+Admins can change the survey in **Settings → Feedback**: switch it on or off, reword the question, set how long rating links last, and choose who gets a **low-rating alert** (by default, ratings of 2 or lower alert the assigned agent and anyone you add, such as the IT manager).
 
 Optional: set a `FEEDBACK_SECRET` environment variable in Netlify to any long random text. Otherwise the links are signed with a key derived from the app secret, and rotating the client secret will expire the links already sent.
 

@@ -14,6 +14,7 @@ const S = {
   my: [], myEvents: [], myDetails: {}, ptab: "new", psel: null, pconfirm: null, bellOpen: false,
   pform: {}, preply: {}, perr: "", psending: false, seen: loadSeen(),
   prate: {}, prComment: {}, prEdit: {}, recentFb: null, fbLoading: false, af: null, auditRows: null, auditLoading: false, backups: null, backupsLoading: false,
+  rp: null, allFb: null, allFbLoading: false, fbDraft: null, loadError: "",
   stab: "users", uq: "", dir: [], dirAvailable: null, unew: { name: "", email: "", role: "Agent" }, slaDraft: null, uploading: false, mailChecking: false,
   logoOk: false, navOpen: false, searchOpen: false, userMenu: false,
 };
@@ -73,7 +74,7 @@ function signOut() { pca.logoutRedirect({ account, postLogoutRedirectUri: locati
 async function loadAgent() {
   const [settings, tickets] = await Promise.all([api("GET", "/settings"), api("GET", "/tickets")]);
   S.settings = { ...S.settings, ...settings };
-  S.tickets = tickets; S.loaded = true;
+  S.tickets = tickets; S.loaded = true; S.loadError = "";
   if (S.selected && !S.tickets.some(t => t.id === S.selected)) S.selected = null;
 }
 async function loadMine() {
@@ -158,6 +159,8 @@ const ICONS = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   refresh: '<path d="M20 11a8 8 0 0 0-14.9-3.5L4 9M4 4v5h5M4 13a8 8 0 0 0 14.9 3.5L20 15M20 20v-5h-5"/>',
 };
 function ico(n, cls) { return `<svg class="ico${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ""}</svg>`; }
@@ -226,11 +229,12 @@ function renderDesk() {
   const counts = Object.fromEntries(VIEWS.map(v => [v[0], S.tickets.filter(v[3]).length]));
   const navItem = (attr, val, label, icon, count, hot) => `<button class="nav" ${attr}="${val}" aria-current="${(attr === "data-view" ? S.page === "tickets" && S.view === val : S.page === val)}">${ico(icon)}<span class="label">${label}</span>${count != null ? `<span class="count ${hot ? "hot" : ""}">${count}</span>` : ""}</button>`;
   let content;
-  if (!S.loaded) content = `<div class="spinner">Loading tickets…</div>`;
+  if (!S.loaded) content = S.loadError ? `<div class="page"><div class="card empty" role="alert"><h3>The tickets couldn’t be loaded</h3><p>${esc(S.loadError)}</p><button class="btn primary" data-act="retryload">${ico("refresh")}Try again</button><p class="c-muted" style="font-size:13px;margin-top:16px">If this keeps happening, open <a href="/api/health" target="_blank" rel="noopener">/api/health</a> to see which connection is failing.</p></div></div>` : `<div class="spinner">Loading tickets…</div>`;
   else if (S.page === "tickets") { const t = S.selected && S.tickets.find(x => x.id === S.selected); content = t ? renderDetail(t) : renderList(counts); }
   else if (S.page === "dashboard") content = renderDash(counts);
   else if (S.page === "portal") content = `<div class="page in-desk">${renderPortalBody(true)}</div>`;
   else if (S.page === "settings") content = renderSettingsPage();
+  else if (S.page === "reports") content = renderReports();
   else content = renderContacts();
   return `<div class="shell">
     <header class="topbar">
@@ -246,6 +250,7 @@ function renderDesk() {
     <nav class="sidenav ${S.navOpen ? "open" : ""}" aria-label="Main">
       <h2>Overview</h2>
       ${navItem("data-page", "dashboard", "Dashboard", "dash")}
+      ${navItem("data-page", "reports", "Reports", "chart")}
       <h2>Tickets</h2>
       ${VIEWS.map(v => navItem("data-view", v[0], v[1], v[2], counts[v[0]], v[0] === "overdue" && counts.overdue > 0)).join("")}
       <h2>Directory</h2>
@@ -541,7 +546,7 @@ root.addEventListener("click", async e => {
   if (el.dataset.popen) { const id = Number(el.dataset.popen); S.ptab = "mine"; S.psel = id; S.pconfirm = null; S.bellOpen = false; markSeen([id]); render(); window.scrollTo(0, 0); loadMyDetail(id); return; }
   if (el.dataset.view) { S.page = "tickets"; S.view = el.dataset.view; S.search = ""; if (el.dataset.sort) S.sort = el.dataset.sort; S.contact = null; S.checked.clear(); S.selected = null; S.search = ""; render(); return; }
   if (el.dataset.page) { S.page = el.dataset.page; S.selected = null; render(); document.getElementById("main")?.scrollTo(0, 0); if (S.page === "portal") loadMine().then(render).catch(() => { }); return; }
-  if (el.dataset.open) { if (e.target.closest("input")) return; S.selected = Number(el.dataset.open); S.dtab = "conversation"; render(); document.getElementById("main")?.scrollTo(0, 0); loadDetail(S.selected); return; }
+  if (el.dataset.open) { if (e.target.closest("input")) return; S.page = "tickets"; S.selected = Number(el.dataset.open); S.dtab = "conversation"; render(); document.getElementById("main")?.scrollTo(0, 0); loadDetail(S.selected); return; }
   if (el.dataset.tab) { S.dtab = el.dataset.tab; S._scrollThread = true; render(); return; }
   if (el.dataset.cmode) { S.cmode = el.dataset.cmode; render(); document.getElementById("cBody")?.focus(); return; }
   if (el.dataset.contact != null) { S.page = "tickets"; S.view = "all"; S.contact = el.dataset.contact; S.search = ""; S.selected = null; render(); return; }
@@ -557,6 +562,7 @@ root.addEventListener("click", async e => {
   else if (a === "settings") { S.page = "settings"; S.selected = null; S.userMenu = false; S.navOpen = false; render(); document.getElementById("main")?.scrollTo(0, 0); }
   else if (a === "signout") signOut();
   else if (a === "back") { S.selected = null; render(); }
+  else if (a === "retryload") { S.loadError = ""; render(); try { await loadAgent(); } catch (e2) { S.loadError = e2.message || "Something went wrong."; } render(); }
   else if (a === "clear-contact") { S.contact = null; render(); }
   else if (a === "bulk-clear") { S.checked.clear(); render(); }
   else if (a === "bell") { S.bellOpen = !S.bellOpen; render(); }
@@ -660,8 +666,8 @@ function addBusinessTime(startMs, hours, sla) {
 function slaDraft() { if (!S.slaDraft) S.slaDraft = JSON.parse(JSON.stringify(S.settings.sla)); return S.slaDraft; }
 function renderSettingsPage() {
   if (!S.user.isAdmin) return `<div class="page"><div class="card empty"><h3>Admins only</h3><p>Ask a service desk admin to change settings.</p></div></div>`;
-  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["branding", "Branding", "edit"], ["email", "Email", "mail"], ["audit", "Activity log", "shield"], ["backups", "Backups", "refresh"]];
-  const body = { users: setUsers, sla: setSla, departments: setDepartments, branding: setBranding, email: setEmail, audit: setAudit, backups: setBackups }[S.stab] || setUsers;
+  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["feedback", "Feedback", "star"], ["branding", "Branding", "edit"], ["email", "Email", "mail"], ["audit", "Activity log", "shield"], ["backups", "Backups", "refresh"]];
+  const body = { users: setUsers, sla: setSla, departments: setDepartments, feedback: setFeedback, branding: setBranding, email: setEmail, audit: setAudit, backups: setBackups }[S.stab] || setUsers;
   return `<div class="page">
     <div class="page-head"><div><h1>Settings</h1><p>Manage who works on the desk, response targets and how the desk looks.</p></div></div>
     <div class="settings-layout">
@@ -835,6 +841,229 @@ function setBackups() {
         <li>To back up on demand, open GitHub → Actions → <b>Nightly backup</b> → Run workflow. To prove a restore works, run <b>Restore test</b> into an empty test site.</li>
       </ul></section>`;
 }
+/* ---------- reports ---------- */
+const RP_PERIODS = [["7d", "Last 7 days"], ["30d", "Last 30 days"], ["90d", "Last 90 days"], ["month", "This month"], ["lastmonth", "Last month"], ["quarter", "This quarter"], ["year", "This year"], ["custom", "Custom range"]];
+const RP_TABS = [["overview", "Overview"], ["sla", "SLA performance"], ["agents", "Agent performance"], ["csat", "Customer satisfaction"], ["breakdown", "Breakdown"]];
+function rpState() { if (!S.rp) S.rp = { period: "30d", from: isoDay(Date.now() - 29 * 864e5), to: isoDay(Date.now()), dept: "", agent: "", tab: "overview", lowOnly: false }; return S.rp; }
+function rpRange() {
+  const r = rpState(), now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  let from, to = Date.now();
+  switch (r.period) {
+    case "7d": from = sod(new Date(Date.now() - 6 * 864e5)); break;
+    case "90d": from = sod(new Date(Date.now() - 89 * 864e5)); break;
+    case "month": from = new Date(y, m, 1).getTime(); break;
+    case "lastmonth": from = new Date(y, m - 1, 1).getTime(); to = new Date(y, m, 1).getTime() - 1; break;
+    case "quarter": from = new Date(y, Math.floor(m / 3) * 3, 1).getTime(); break;
+    case "year": from = new Date(y, 0, 1).getTime(); break;
+    case "custom": from = dayStart(r.from); to = dayStart(r.to) + 864e5 - 1; break;
+    default: from = sod(new Date(Date.now() - 29 * 864e5));
+  }
+  return { from, to };
+}
+const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+const pct = (n, d) => d ? Math.round(100 * n / d) + "%" : "—";
+const hrs = ms => ms == null ? "—" : dur(ms);
+function rpData() {
+  const r = rpState(), { from, to } = rpRange();
+  const scope = S.tickets.filter(t => (!r.dept || t.department === r.dept) && (!r.agent || (r.agent === "__none" ? !t.assigneeEmail : t.assigneeEmail === r.agent)));
+  const created = scope.filter(t => t.createdAt >= from && t.createdAt <= to);
+  const resolved = scope.filter(t => t.status === "Closed" && t.closedAt >= from && t.closedAt <= to);
+  const ids = new Set(scope.map(t => t.id));
+  const fb = (S.allFb || []).filter(f => ids.has(f.ticketId) && f.at >= from && f.at <= to);
+  return { from, to, scope, created, resolved, fb, open: scope.filter(t => t.status !== "Closed") };
+}
+function frStats(list) { const w = list.filter(t => t.firstResponseAt); const due = w.filter(t => t.firstResponseDueAt); return { avg: avg(w.map(t => t.firstResponseAt - t.createdAt)), met: due.filter(t => t.firstResponseAt <= t.firstResponseDueAt).length, of: due.length }; }
+function resStats(list) { const c = list.filter(t => t.closedAt); const due = c.filter(t => t.dueAt); return { avg: avg(c.map(t => t.closedAt - t.createdAt)), met: due.filter(t => t.closedAt <= t.dueAt).length, of: due.length }; }
+function csatStats(fb) { return { n: fb.length, sat: fb.filter(f => f.rating >= 4).length, avg: avg(fb.map(f => f.rating)) }; }
+function buckets(from, to) {
+  const days = (to - from) / 864e5, out = [];
+  const unit = days <= 31 ? "day" : days <= 140 ? "week" : "month";
+  let d = new Date(from); d.setHours(0, 0, 0, 0);
+  if (unit === "week") d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  if (unit === "month") d.setDate(1);
+  while (d.getTime() <= to && out.length < 400) {
+    const s = d.getTime();
+    if (unit === "day") d.setDate(d.getDate() + 1); else if (unit === "week") d.setDate(d.getDate() + 7); else d.setMonth(d.getMonth() + 1);
+    out.push({ s, e: d.getTime() - 1, label: unit === "month" ? new Date(s).toLocaleDateString(undefined, { month: "short", year: "2-digit" }) : new Date(s).toLocaleDateString(undefined, { day: "numeric", month: "short" }) });
+  }
+  return { unit, list: out };
+}
+function lineChart(labels, series, opts) {
+  opts = opts || {}; const W = 760, H = 240, L = 40, R = 12, T = 14, B = 34;
+  const max = Math.max(opts.max || 0, 1, ...series.flatMap(s => s.values.filter(v => v != null)));
+  const top = opts.max || Math.ceil(max / 4) * 4 || 4;
+  const x = i => L + (labels.length < 2 ? (W - L - R) / 2 : i * (W - L - R) / (labels.length - 1));
+  const y = v => T + (H - T - B) * (1 - v / top);
+  const grid = [0, 1, 2, 3, 4].map(k => { const v = top * k / 4; return `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${opts.suffix ? Math.round(v) + opts.suffix : Math.round(v * 10) / 10}</text>`; }).join("");
+  const step = Math.max(1, Math.ceil(labels.length / 8));
+  const xl = labels.map((l, i) => i % step === 0 || i === labels.length - 1 ? `<text x="${x(i)}" y="${H - 10}" text-anchor="middle" class="ax">${esc(l)}</text>` : "").join("");
+  const lines = series.map(s => {
+    const pts = s.values.map((v, i) => v == null ? null : [x(i), y(v), v, i]).filter(Boolean);
+    return `<polyline fill="none" style="stroke:${s.color};stroke-width:2.5" points="${pts.map(p => p[0] + "," + p[1]).join(" ")}"/>` + pts.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" style="fill:${s.color}"><title>${esc(s.name)}, ${esc(labels[p[3]])}: ${opts.suffix ? Math.round(p[2]) + opts.suffix : p[2]}</title></circle>`).join("");
+  }).join("");
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.title || "Chart")}">${grid}${xl}${lines}</svg>
+    <div class="legend">${series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div></div>`;
+}
+function rpTable(head, rows, empty) {
+  return rows.length ? `<div class="table-card"><table class="dtable rp-table"><thead><tr>${head.map(h => `<th${h.n ? ' class="num"' : ""}>${h.t}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>` : `<p class="c-muted" style="margin:0">${empty}</p>`;
+}
+function renderReports() {
+  const r = rpState(), D = rpData();
+  if (!S.allFb && !S.allFbLoading) { S.allFbLoading = true; api("GET", "/feedback/all").then(x => { S.allFb = x; S.allFbLoading = false; render(); }).catch(() => { S.allFb = []; S.allFbLoading = false; }); }
+  const tab = { overview: rpOverview, sla: rpSla, agents: rpAgents, csat: rpCsat, breakdown: rpBreakdown }[r.tab] || rpOverview;
+  const label = (RP_PERIODS.find(p => p[0] === r.period) || [])[1];
+  return `<div class="page reports">
+    <div class="page-head"><div><h1>Reports</h1><p>${esc(label)}: ${new Date(D.from).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })} to ${new Date(D.to).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}${r.dept ? `, ${esc(r.dept)}` : ""}${r.agent ? `, ${esc(r.agent === "__none" ? "Unassigned" : ((S.settings.users || []).find(u => u.email === r.agent) || {}).name || r.agent)}` : ""}</p></div>
+      <div class="rp-actions"><button class="btn" data-act="rpexport">${ico("up")}Export to Excel</button><button class="btn" data-act="rpprint">Print or save as PDF</button></div></div>
+    <div class="card rp-filters">
+      <div class="field"><label for="rpPeriod">Period</label><select id="rpPeriod" data-rp="period">${RP_PERIODS.map(p => `<option value="${p[0]}"${r.period === p[0] ? " selected" : ""}>${p[1]}</option>`).join("")}</select></div>
+      ${r.period === "custom" ? `<div class="field"><label for="rpFrom">From</label><input type="date" id="rpFrom" data-rp="from" value="${r.from}"></div><div class="field"><label for="rpTo">To</label><input type="date" id="rpTo" data-rp="to" value="${r.to}"></div>` : ""}
+      <div class="field"><label for="rpDept">Department</label><select id="rpDept" data-rp="dept"><option value="">All departments</option>${opt(S.settings.departments, r.dept)}</select></div>
+      <div class="field"><label for="rpAgent">Agent</label><select id="rpAgent" data-rp="agent"><option value="">All agents</option>${(S.settings.users || []).map(u => `<option value="${esc(u.email)}"${r.agent === u.email ? " selected" : ""}>${esc(u.name)}</option>`).join("")}<option value="__none"${r.agent === "__none" ? " selected" : ""}>Unassigned</option></select></div>
+    </div>
+    <nav class="rp-tabs" role="tablist">${RP_TABS.map(t => `<button role="tab" data-rptab="${t[0]}" aria-selected="${r.tab === t[0]}">${t[1]}</button>`).join("")}</nav>
+    ${tab(D)}
+    <p class="c-muted rp-note">Times are measured in calendar hours from when a ticket was opened. Volume counts tickets opened in the period, resolution figures count tickets closed in the period, and satisfaction counts ratings given in the period.</p>
+  </div>`;
+}
+function rpOverview(D) {
+  const fr = frStats(D.created), rs = resStats(D.resolved), cs = csatStats(D.fb);
+  const B = buckets(D.from, D.to);
+  const c = B.list.map(b => D.created.filter(t => t.createdAt >= b.s && t.createdAt <= b.e).length);
+  const z = B.list.map(b => D.resolved.filter(t => t.closedAt >= b.s && t.closedAt <= b.e).length);
+  return `<div class="kpis">
+      <div class="kpi"><div class="l">Tickets opened</div><div class="v">${D.created.length}</div></div>
+      <div class="kpi"><div class="l">Tickets resolved</div><div class="v">${D.resolved.length}</div></div>
+      <div class="kpi"><div class="l">Open now</div><div class="v">${D.open.length}</div></div>
+      <div class="kpi"><div class="l">Average first response</div><div class="v">${hrs(fr.avg)}</div></div>
+      <div class="kpi"><div class="l">Average time to resolve</div><div class="v">${hrs(rs.avg)}</div></div>
+      <div class="kpi"><div class="l">Resolved within target</div><div class="v">${pct(rs.met, rs.of)}</div></div>
+      <div class="kpi"><div class="l">Customer satisfaction</div><div class="v">${pct(cs.sat, cs.n)}</div></div>
+    </div>
+    <section class="card panel"><h2>Opened and resolved, by ${B.unit}</h2>${lineChart(B.list.map(b => b.label), [{ name: "Opened", color: "var(--navy-chart)", values: c }, { name: "Resolved", color: "var(--green)", values: z }], { title: "Tickets opened and resolved" })}</section>`;
+}
+function rpSla(D) {
+  const fr = frStats(D.created), rs = resStats(D.resolved);
+  const rows = PRIORITIES.map(p => { const c = D.created.filter(t => t.priority === p), z = D.resolved.filter(t => t.priority === p), f = frStats(c), x = resStats(z);
+    return `<tr style="cursor:default"><td>${prio(p)}</td><td class="num">${c.length}</td><td class="num">${S.settings.sla.response[p]}h</td><td class="num">${hrs(f.avg)}</td><td class="num">${pct(f.met, f.of)}</td><td class="num">${S.settings.sla.resolution[p]}h</td><td class="num">${hrs(x.avg)}</td><td class="num">${pct(x.met, x.of)}</td></tr>`; });
+  const breached = [...D.resolved.filter(t => t.dueAt && t.closedAt > t.dueAt), ...D.open.filter(t => isOverdue(t))].sort((a, b) => b.createdAt - a.createdAt);
+  const B = buckets(D.from, D.to);
+  const trend = B.list.map(b => { const z = D.resolved.filter(t => t.closedAt >= b.s && t.closedAt <= b.e && t.dueAt); return z.length ? Math.round(100 * z.filter(t => t.closedAt <= t.dueAt).length / z.length) : null; });
+  return `<div class="kpis">
+      <div class="kpi"><div class="l">First response within target</div><div class="v">${pct(fr.met, fr.of)}</div><div class="c-muted kpi-sub">${fr.met} of ${fr.of} tickets</div></div>
+      <div class="kpi"><div class="l">Resolved within target</div><div class="v">${pct(rs.met, rs.of)}</div><div class="c-muted kpi-sub">${rs.met} of ${rs.of} tickets</div></div>
+      <div class="kpi ${breached.length ? "alert" : ""}"><div class="l">Breached or overdue</div><div class="v">${breached.length}</div></div>
+    </div>
+    <section class="card panel"><h2>Targets by priority</h2>${rpTable([{ t: "Priority" }, { t: "Opened", n: 1 }, { t: "Response target", n: 1 }, { t: "Avg first response", n: 1 }, { t: "Response met", n: 1 }, { t: "Resolution target", n: 1 }, { t: "Avg resolution", n: 1 }, { t: "Resolution met", n: 1 }], rows, "")}</section>
+    <section class="card panel" style="margin-top:16px"><h2>Resolution within target, by ${B.unit}</h2>${lineChart(B.list.map(b => b.label), [{ name: "Resolved within target", color: "var(--green)", values: trend }], { max: 100, suffix: "%", title: "SLA trend" })}</section>
+    <section class="card panel" style="margin-top:16px"><h2>Tickets that missed their target (${breached.length})</h2>${rpTable([{ t: "Ticket" }, { t: "Subject" }, { t: "Priority" }, { t: "Assignee" }, { t: "Target" }, { t: "Missed by", n: 1 }],
+      breached.slice(0, 200).map(t => `<tr data-open="${t.id}" tabindex="0"><td class="c-num">#${t.number}</td><td>${esc(t.subject)}</td><td>${prio(t.priority)}</td><td>${esc(t.assigneeName || "Unassigned")}</td><td class="c-muted">${fmt(t.dueAt)}</td><td class="num bad-txt">${dur((t.closedAt || Date.now()) - t.dueAt)}${t.closedAt ? "" : " (still open)"}</td></tr>`), "No ticket missed its target in this period.")}</section>`;
+}
+function rpAgents(D) {
+  const people = [...(S.settings.users || []).map(u => ({ name: u.name, email: u.email })), { name: "Unassigned", email: "" }];
+  const rows = people.map(p => {
+    const mine = t => (t.assigneeEmail || "") === p.email;
+    const c = D.created.filter(mine), z = D.resolved.filter(mine), o = D.open.filter(mine), f = frStats(c), x = resStats(z);
+    const tids = new Set(D.scope.filter(mine).map(t => t.id)); const fb = csatStats(D.fb.filter(r => tids.has(r.ticketId)));
+    if (!c.length && !z.length && !o.length && !fb.n) return null;
+    return { p, c: c.length, z: z.length, o: o.length, f, x, fb };
+  }).filter(Boolean).sort((a, b) => b.z - a.z);
+  return `<section class="card panel"><h2>Agent performance</h2>${rpTable([{ t: "Agent" }, { t: "Assigned", n: 1 }, { t: "Resolved", n: 1 }, { t: "Open now", n: 1 }, { t: "Avg first response", n: 1 }, { t: "Avg resolution", n: 1 }, { t: "Within target", n: 1 }, { t: "CSAT", n: 1 }, { t: "Avg rating", n: 1 }],
+    rows.map(r => `<tr style="cursor:default"><td><div class="c-who"><span class="avatar">${esc(initials(r.p.name))}</span><b>${esc(r.p.name)}</b></div></td><td class="num">${r.c}</td><td class="num">${r.z}</td><td class="num">${r.o}</td><td class="num">${hrs(r.f.avg)}</td><td class="num">${hrs(r.x.avg)}</td><td class="num">${pct(r.x.met, r.x.of)}</td><td class="num">${pct(r.fb.sat, r.fb.n)}${r.fb.n ? ` <span class="c-muted">(${r.fb.n})</span>` : ""}</td><td class="num">${r.fb.avg ? r.fb.avg.toFixed(1) : "—"}</td></tr>`), "No agent activity in this period.")}</section>
+    <section class="card panel" style="margin-top:16px"><h2>Tickets resolved, by agent</h2>${bars(Object.fromEntries(rows.filter(r => r.z).map(r => [r.p.name, r.z])))}</section>`;
+}
+function rpCsat(D) {
+  const cs = csatStats(D.fb), r = rpState();
+  const closedInPeriod = D.resolved.length;
+  const dist = [5, 4, 3, 2, 1].map(n => [n, D.fb.filter(f => f.rating === n).length]);
+  const B = buckets(D.from, D.to);
+  const trend = B.list.map(b => { const x = D.fb.filter(f => f.at >= b.s && f.at <= b.e); return x.length ? Math.round(100 * x.filter(f => f.rating >= 4).length / x.length) : null; });
+  const list = D.fb.filter(f => !r.lowOnly || f.rating <= 2).sort((a, b) => b.at - a.at);
+  return `<div class="kpis">
+      <div class="kpi"><div class="l">CSAT score</div><div class="v">${pct(cs.sat, cs.n)}</div><div class="c-muted kpi-sub">Share of ratings that are 4 or 5</div></div>
+      <div class="kpi"><div class="l">Average rating</div><div class="v">${cs.avg ? cs.avg.toFixed(1) : "—"}<span class="kpi-unit">/5</span></div></div>
+      <div class="kpi"><div class="l">Ratings received</div><div class="v">${cs.n}</div></div>
+      <div class="kpi"><div class="l">Response rate</div><div class="v">${pct(cs.n, closedInPeriod)}</div><div class="c-muted kpi-sub">Ratings per ticket closed</div></div>
+    </div>
+    <div class="grid2">
+      <section class="card panel"><h2>Rating distribution</h2>${dist.map(([n, v]) => `<div class="bar"><span>${stars(n)}</span><span class="track"><i style="width:${cs.n ? (v / Math.max(...dist.map(d => d[1]), 1)) * 100 : 0}%;background:${n >= 4 ? "var(--green)" : n === 3 ? "#E89A1E" : "var(--red)"}"></i></span><b>${v}</b></div>`).join("")}</section>
+      <section class="card panel"><h2>CSAT by ${B.unit}</h2>${lineChart(B.list.map(b => b.label), [{ name: "CSAT", color: "var(--green)", values: trend }], { max: 100, suffix: "%", title: "CSAT trend" })}</section>
+    </div>
+    <section class="card panel" style="margin-top:16px"><div class="panel-head"><h2>Comments and ratings (${list.length})</h2><label class="switch" style="margin:0"><input type="checkbox" data-rp="lowOnly" ${r.lowOnly ? "checked" : ""}><span>Only low ratings (1–2)</span></label></div>
+      ${list.length ? `<ul class="fb-list">${list.slice(0, 300).map(f => { const t = S.tickets.find(x => x.id === f.ticketId); return `<li><div>${stars(f.rating)} <b>${esc(RATING_LABELS[f.rating])}</b> <button class="linkish" data-open="${f.ticketId}">Ticket #${f.number}</button></div><div class="meta"><span>${esc(t ? t.requesterName : f.requesterEmail)}</span><span>Agent: ${esc(f.assigneeName || "Unassigned")}</span><span>${fmt(f.at)}</span><span>via ${esc(f.via)}</span></div>${f.comment ? `<blockquote>“${esc(f.comment)}”</blockquote>` : ""}</li>`; }).join("")}</ul>` : `<p class="c-muted" style="margin:0">${S.allFbLoading ? "Loading…" : "No ratings in this period."}</p>`}</section>`;
+}
+function rpBreakdown(D) {
+  const count = (list, key) => list.reduce((m, t) => { const k = key(t) || "Not set"; m[k] = (m[k] || 0) + 1; return m; }, {});
+  const reqs = Object.entries(count(D.created, t => t.requesterName || t.requesterEmail)).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const tags = {}; D.created.forEach(t => t.tags.forEach(g => { tags[g] = (tags[g] || 0) + 1; }));
+  return `<div class="grid2">
+      <section class="card panel"><h2>By department</h2>${bars(count(D.created, t => t.department))}</section>
+      <section class="card panel"><h2>By channel</h2>${bars(count(D.created, t => t.channel))}</section>
+      <section class="card panel"><h2>By priority</h2>${bars(count(D.created, t => t.priority))}</section>
+      <section class="card panel"><h2>By current status</h2>${bars(count(D.created, t => t.status))}</section>
+      <section class="card panel"><h2>Top requesters</h2>${reqs.length ? rpTable([{ t: "Requester" }, { t: "Tickets", n: 1 }], reqs.map(([k, v]) => `<tr style="cursor:default"><td>${esc(k)}</td><td class="num">${v}</td></tr>`), "") : `<p class="c-muted" style="margin:0">No tickets in this period.</p>`}</section>
+      <section class="card panel"><h2>Top tags</h2>${Object.keys(tags).length ? bars(Object.fromEntries(Object.entries(tags).sort((a, b) => b[1] - a[1]).slice(0, 10))) : `<p class="c-muted" style="margin:0">No tags used in this period.</p>`}</section>
+    </div>`;
+}
+function exportReport() {
+  const D = rpData(), r = rpState();
+  const fbBy = new Map((S.allFb || []).map(f => [f.ticketId, f]));
+  const cell = v => { const s = v == null ? "" : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const h = ms => ms == null ? "" : (ms / 36e5).toFixed(2);
+  const iso = t => t ? new Date(t).toISOString().replace("T", " ").slice(0, 16) : "";
+  const head = ["Ticket", "Subject", "Status", "Priority", "Department", "Channel", "Requester", "Requester email", "Assignee", "Opened (UTC)", "First response (UTC)", "First response hours", "First response within target", "Resolution due (UTC)", "Closed (UTC)", "Resolution hours", "Resolved within target", "Rating", "Rating comment", "Tags"];
+  const list = [...new Map([...D.created, ...D.resolved].map(t => [t.id, t])).values()].sort((a, b) => a.number - b.number);
+  const lines = [head.join(",")].concat(list.map(t => { const f = fbBy.get(t.id); return [t.number, t.subject, t.status, t.priority, t.department, t.channel, t.requesterName, t.requesterEmail, t.assigneeName, iso(t.createdAt), iso(t.firstResponseAt), h(t.firstResponseAt ? t.firstResponseAt - t.createdAt : null), t.firstResponseAt && t.firstResponseDueAt ? (t.firstResponseAt <= t.firstResponseDueAt ? "Yes" : "No") : "", iso(t.dueAt), iso(t.closedAt), h(t.closedAt ? t.closedAt - t.createdAt : null), t.closedAt && t.dueAt ? (t.closedAt <= t.dueAt ? "Yes" : "No") : "", f ? f.rating : "", f ? f.comment : "", t.tags.join("; ")].map(cell).join(","); }));
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `service-desk-report-${isoDay(D.from)}-to-${isoDay(D.to)}.csv`; document.body.appendChild(a); a.click(); a.remove();
+  api("POST", "/reports/export", { report: (RP_TABS.find(t => t[0] === r.tab) || [])[1], from: isoDay(D.from), to: isoDay(D.to), filters: { department: r.dept, agent: r.agent }, rows: list.length }).catch(() => { });
+  toast(`Exported ${list.length} tickets. Open the file in Excel.`);
+}
+root.addEventListener("click", e => {
+  const el = e.target.closest("[data-rptab],[data-act='rpexport'],[data-act='rpprint']"); if (!el) return;
+  if (el.dataset.rptab) { rpState().tab = el.dataset.rptab; render(); return; }
+  if (el.dataset.act === "rpexport") exportReport();
+  if (el.dataset.act === "rpprint") window.print();
+});
+root.addEventListener("change", e => {
+  const t = e.target; if (!t.dataset.rp) return;
+  const r = rpState(); r[t.dataset.rp] = t.type === "checkbox" ? t.checked : t.value; render();
+});
+
+function fbDraft() { if (!S.fbDraft) S.fbDraft = JSON.parse(JSON.stringify(S.settings.feedback || { enabled: true, question: "How did we do?", intro: "Rate the support you received. It takes one click.", linkDays: 30, alertAt: 2, alertEmails: [] })); return S.fbDraft; }
+function setFeedback() {
+  const d = fbDraft(); const dirty = JSON.stringify(d) !== JSON.stringify(S.settings.feedback);
+  const users = (S.settings.users || []).filter(u => !d.alertEmails.includes(u.email));
+  return `<section class="card section-card"><h2>Customer satisfaction survey</h2><p>When a ticket is closed, the requester’s email asks them to rate the support from 1 to 5. Results appear under <b>Reports → Customer satisfaction</b>.</p>
+    <label class="switch"><input type="checkbox" data-fb="enabled" ${d.enabled ? "checked" : ""}><span>Ask for feedback when a ticket is closed</span></label>
+    <fieldset class="bh" ${d.enabled ? "" : "disabled"}>
+      <div class="cols"><div class="field"><label for="fbQ">Question</label><input id="fbQ" data-fb="question" maxlength="120" value="${esc(d.question)}"></div>
+      <div class="field"><label for="fbDays">Rating links stay valid for</label><div class="hours"><input type="number" id="fbDays" data-fb="linkDays" min="3" max="90" value="${d.linkDays}"><span>days</span></div></div>
+      <div class="field full"><label for="fbIntro">Line under the question</label><input id="fbIntro" data-fb="intro" maxlength="300" value="${esc(d.intro)}"></div></div>
+      <span class="flabel">Preview</span>
+      <div class="fb-preview"><b>${esc(d.question)}</b><span>${esc(d.intro)}</span><div>${[1, 2, 3, 4, 5].map(n => `<i><strong>${n}</strong>${RATING_LABELS[n]}</i>`).join("")}</div></div>
+    </fieldset></section>
+  <section class="card section-card" style="margin-top:16px"><h2>Low-rating alerts</h2><p>Follow up quickly when someone is unhappy. The agent on the ticket and the people below get an email with the rating and comment.</p>
+    <div class="field" style="max-width:360px"><label for="fbAlert">Send an alert when the rating is</label><select id="fbAlert" data-fb="alertAt">${[[0, "Never (alerts off)"], [1, "1 (very dissatisfied)"], [2, "2 or lower"], [3, "3 or lower"]].map(o => `<option value="${o[0]}"${d.alertAt === o[0] ? " selected" : ""}>${o[1]}</option>`).join("")}</select></div>
+    <fieldset class="bh" ${d.alertAt ? "" : "disabled"}><span class="flabel">Also alert</span>
+      <div class="chips">${d.alertEmails.length ? d.alertEmails.map(e2 => `<span>${esc(((S.settings.users || []).find(u => u.email === e2) || {}).name || e2)}<button data-fbremove="${esc(e2)}" aria-label="Remove ${esc(e2)}">×</button></span>`).join("") : `<small class="c-muted">Only the assigned agent is alerted.</small>`}</div>
+      <div class="addrow" style="max-width:520px"><input id="fbAddEmail" list="fbUsers" type="email" placeholder="Supervisor or manager email" aria-label="Email to alert"><datalist id="fbUsers">${users.map(u => `<option value="${esc(u.email)}">${esc(u.name)}</option>`).join("")}</datalist><button class="btn" data-act="fbaddemail">Add</button></div>
+    </fieldset></section>
+  <div class="savebar card"><span>${dirty ? "You have unsaved changes." : "All changes saved."}</span><span class="savebar-actions"><button class="btn" data-act="fbreset" ${dirty ? "" : "disabled"}>Discard</button><button class="btn primary" data-act="fbsave" ${dirty ? "" : "disabled"}>Save feedback settings</button></span></div>`;
+}
+root.addEventListener("click", async e => {
+  const el = e.target.closest("[data-fbremove],[data-act^='fb']"); if (!el || !S.user?.isAdmin) return;
+  const d = fbDraft();
+  if (el.dataset.fbremove) { d.alertEmails = d.alertEmails.filter(x => x !== el.dataset.fbremove); render(); return; }
+  const a = el.dataset.act;
+  if (a === "fbaddemail") { const i = document.getElementById("fbAddEmail"); const v = (i.value || "").trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast("Enter a valid email address."); return; } if (!d.alertEmails.includes(v)) d.alertEmails = [...d.alertEmails, v]; render(); return; }
+  if (a === "fbreset") { S.fbDraft = null; render(); return; }
+  if (a === "fbsave") { try { const r = await api("PUT", "/settings", { feedback: d }); S.settings = { ...S.settings, ...r }; S.fbDraft = null; toast("Feedback settings saved"); } catch (e2) { } render(); }
+});
+root.addEventListener("input", e => { const t = e.target; if (!t.dataset.fb || t.type === "checkbox" || t.tagName === "SELECT") return; const d = fbDraft(); d[t.dataset.fb] = t.type === "number" ? Number(t.value) : t.value; const bar = document.querySelector(".savebar"); if (bar) { const dirty = JSON.stringify(d) !== JSON.stringify(S.settings.feedback); bar.querySelector("span").textContent = dirty ? "You have unsaved changes." : "All changes saved."; bar.querySelectorAll("button").forEach(b => b.disabled = !dirty); } const pv = document.querySelector(".fb-preview"); if (pv) { pv.querySelector("b").textContent = d.question; pv.querySelector("span").textContent = d.intro; } });
+root.addEventListener("change", e => { const t = e.target; if (!t.dataset.fb) return; const d = fbDraft(); if (t.type === "checkbox") d[t.dataset.fb] = t.checked; else if (t.tagName === "SELECT") d[t.dataset.fb] = Number(t.value); else return; render(); });
+
 async function saveSettingsPart(part, msg) {
   try { const r = await api("PUT", "/settings", part); S.settings = { ...S.settings, ...r }; S.slaDraft = null; toast(msg || "Settings saved"); } catch (e) { }
   render();
@@ -850,7 +1079,7 @@ root.addEventListener("click", async e => {
   const el = e.target.closest("[data-stab],[data-pick],[data-uremove],[data-dremove],[data-holremove],[data-act^='u'],[data-act^='sla'],[data-act^='hol'],[data-act^='dept'],[data-act^='logo'],[data-act='mailcheck']");
   if (el && el.dataset.act === "logexport") { exportAudit(); return; }
   if (!el || !S.user || !S.user.isAdmin) return;
-  if (el.dataset.stab) { S.stab = el.dataset.stab; if (S.stab === "audit") S.auditRows = null; if (S.stab === "backups") S.backups = null; render(); return; }
+  if (el.dataset.stab) { S.stab = el.dataset.stab; if (S.stab === "audit") S.auditRows = null; if (S.stab === "backups") S.backups = null; S.fbDraft = null; render(); return; }
   if (el.dataset.pick != null) { const p = S.dir[Number(el.dataset.pick)]; S.unew = { ...S.unew, name: p.name, email: p.email }; S.uq = ""; S.dir = []; render(); document.getElementById("uRole")?.focus(); return; }
   const users = S.settings.users || [];
   if (el.dataset.uremove) {
@@ -944,19 +1173,19 @@ async function boot() {
   pca.setActiveAccount(account);
   try { S.user = await api("GET", "/me"); } catch (e) { fatal("We couldn’t confirm your sign-in. Reload the page to try again."); return; }
   const h = (location.hash || "").slice(1);
-  if (["dashboard", "contacts", "portal", "settings"].includes(h)) S.page = h;
+  if (["dashboard", "contacts", "portal", "settings", "reports"].includes(h)) S.page = h;
   if (VIEWS.some(v => v[0] === h)) { S.page = "tickets"; S.view = h; }
   if (!S.user.isAgent && (h === "portal" || h === "mine")) S.ptab = "mine";
   render();
   try {
     if (S.user.isAgent) { await loadAgent(); if (S.page === "portal") await loadMine(); }
     else { const s = await api("GET", "/settings"); S.settings = { ...S.settings, ...s }; await loadMine(); }
-  } catch (e) { }
+  } catch (e) { S.loadError = e.message || "Something went wrong."; }
   render();
   setInterval(async () => {
     if (document.hidden) return;
     try {
-      if (S.user.isAgent) { await loadAgent(); if (S.page === "dashboard") S.recentFb = await api("GET", "/feedback/recent"); if (S.selected) S.details[S.selected] = await api("GET", "/tickets/" + S.selected); }
+      if (S.user.isAgent) { await loadAgent(); if (S.page === "dashboard") S.recentFb = await api("GET", "/feedback/recent"); if (S.page === "reports") S.allFb = await api("GET", "/feedback/all"); if (S.selected) S.details[S.selected] = await api("GET", "/tickets/" + S.selected); }
       if (!S.user.isAgent || S.page === "portal") { await loadMine(); if (S.psel) S.myDetails[S.psel] = await api("GET", "/tickets/" + S.psel); }
       const a = document.activeElement;
       if (!(a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT" || a.tagName === "SELECT")) && !dlgNew.open) render();

@@ -4,7 +4,7 @@ import { healthCheck } from "../../lib/health.mjs";
 import { authenticate, requireAgent, requireAdmin, httpError } from "../../lib/auth.mjs";
 import {
   getSettings, saveSettings, publicSettings, logoUrl, listTickets, listMine, getDetail, getTicket,
-  createTicket, updateTicket, addMessage, deleteTicket, addTicketEvent,
+  createTicket, updateTicket, addMessage, deleteTicket, addTicketEvent, afterFeedback,
 } from "../../lib/tickets.mjs";
 import { decodeLogo, uploadLogo, downloadLogo, deleteLogoFiles, searchDirectory } from "../../lib/brand.mjs";
 import { pollInbox } from "../../lib/inbox.mjs";
@@ -36,6 +36,7 @@ function settingsDiff(before, after) {
     if (removed.length) d.departmentsRemoved = removed;
   }
   if (after.sla && JSON.stringify(after.sla) !== JSON.stringify(before.sla)) d.sla = { before: before.sla, after: after.sla };
+  if (after.feedback && JSON.stringify(after.feedback) !== JSON.stringify(before.feedback)) d.feedback = { before: before.feedback, after: after.feedback };
   return d;
 }
 function summarise(d) {
@@ -45,6 +46,7 @@ function summarise(d) {
   if (d.roleChanges) parts.push("changed user roles");
   if (d.departmentsAdded || d.departmentsRemoved) parts.push("changed departments");
   if (d.sla) parts.push("changed the SLA policy");
+  if (d.feedback) parts.push("changed feedback settings");
   return parts.length ? parts.join(", ") : "saved settings without changes";
 }
 
@@ -94,7 +96,8 @@ export default async (req, context) => {
       if (!t || t.number !== p.n) throw httpError(404, "This ticket no longer exists.");
       const fb = await saveFeedback(t, { rating: b.rating, comment: b.comment, via: "Email link" });
       await addTicketEvent(t, `Requester rated the support ${fb.rating}/5 (${fb.label})${fb.comment ? " with a comment" : ""}`, t.requesterName || p.e, false);
-      await audit({ name: t.requesterName, email: p.e }, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${t.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: t.number, details: { rating: fb.rating, comment: fb.comment, via: "Email link" }, info });
+      const alerted = await afterFeedback(t, fb);
+      await audit({ name: t.requesterName, email: p.e }, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${t.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: t.number, details: { rating: fb.rating, comment: fb.comment, via: "Email link", lowRatingAlertSentTo: alerted }, info });
       return json({ ok: true, rating: fb.rating });
     }
 
@@ -114,7 +117,7 @@ export default async (req, context) => {
       requireAdmin(user);
       const b = await readBody(req);
       const input = {};
-      for (const k of ["departments", "users", "sla"]) if (k in b) input[k] = b[k];
+      for (const k of ["departments", "users", "sla", "feedback"]) if (k in b) input[k] = b[k];
       const before = await getSettings(true);
       const after = await saveSettings(input);
       const diff = settingsDiff(before, Object.fromEntries(Object.keys(input).map((k) => [k, after[k]])));
@@ -204,11 +207,22 @@ export default async (req, context) => {
         const b = await readBody(req);
         const fb = await saveFeedback(pre.ticket, { rating: b.rating, comment: b.comment, via: "Portal" });
         await addTicketEvent(pre.ticket, `Requester rated the support ${fb.rating}/5 (${fb.label})${fb.comment ? " with a comment" : ""}`, user.name, false);
-        await audit(user, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${pre.ticket.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: pre.ticket.number, details: { rating: fb.rating, comment: fb.comment, via: "Portal" }, info });
+        const alerted = await afterFeedback(pre.ticket, fb);
+        await audit(user, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${pre.ticket.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: pre.ticket.number, details: { rating: fb.rating, comment: fb.comment, via: "Portal", lowRatingAlertSentTo: alerted }, info });
         return json(await getDetail(id, { ...user, isAgent: false }));
       }
     }
 
+    if (path === "/feedback/all" && method === "GET") {
+      requireAgent(user);
+      return json((await listFeedback()).sort((a, b) => b.at - a.at));
+    }
+    if (path === "/reports/export" && method === "POST") {
+      requireAgent(user);
+      const b = await readBody(req);
+      await audit(user, `Exported the ${String(b.report || "tickets").slice(0, 60)} report (${Number(b.rows) || 0} rows)`, { category: "Audit", details: { report: b.report, from: b.from, to: b.to, filters: b.filters, rows: b.rows }, info });
+      return json({ ok: true });
+    }
     if (path === "/feedback/recent" && method === "GET") {
       requireAgent(user);
       return json((await listFeedback()).sort((a, b) => b.at - a.at).slice(0, 200));
