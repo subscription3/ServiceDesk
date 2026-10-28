@@ -1,0 +1,42 @@
+name: Nightly backup
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # 01:00 UTC = 02:00 in Lagos, every day
+  workflow_dispatch: {}   # "Run workflow" button for an on-demand backup
+
+permissions:
+  contents: read
+
+concurrency:
+  group: service-desk-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - name: Back up and verify
+        run: node scripts/backup.mjs
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_HOSTNAME: ${{ secrets.SHAREPOINT_HOSTNAME }}
+          SHAREPOINT_SITE_PATH: ${{ secrets.SHAREPOINT_SITE_PATH }}
+          ORG_NAME: ${{ vars.ORG_NAME || 'InfraCredit' }}
+          BACKUP_RETENTION_DAYS: ${{ vars.BACKUP_RETENTION_DAYS || '0' }}
+      # Second, independent copy kept by GitHub (encrypted, visible only to people with access to this private repository).
+      - name: Keep a second copy in GitHub
+        if: always() && vars.KEEP_GITHUB_COPY != 'false' && hashFiles('backup-output/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-desk-backup-${{ github.run_number }}
+          path: backup-output/
+          retention-days: ${{ vars.GITHUB_COPY_RETENTION_DAYS || 90 }}
