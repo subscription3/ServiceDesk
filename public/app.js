@@ -14,7 +14,7 @@ const S = {
   my: [], myEvents: [], myDetails: {}, ptab: "new", psel: null, pconfirm: null, bellOpen: false,
   pform: {}, preply: {}, perr: "", psending: false, seen: loadSeen(),
   prate: {}, prComment: {}, prEdit: {}, recentFb: null, fbLoading: false, af: null, auditRows: null, auditLoading: false, backups: null, backupsLoading: false,
-  rp: null, allFb: null, allFbLoading: false, fbDraft: null, loadError: "",
+  emDraft: null, rp: null, allFb: null, allFbLoading: false, fbDraft: null, loadError: "",
   stab: "users", uq: "", dir: [], dirAvailable: null, unew: { name: "", email: "", role: "Agent" }, slaDraft: null, uploading: false, mailChecking: false,
   logoOk: false, navOpen: false, searchOpen: false, userMenu: false,
 };
@@ -96,8 +96,8 @@ function mergeTicket(t) {
 }
 
 /* ---------- agent actions ---------- */
-async function setField(id, field, value) {
-  try { const d = await api("PATCH", "/tickets/" + id, { [field]: value }); S.details[id] = d; mergeTicket(d.ticket); render(); return true; }
+async function setField(id, field, value, silent) {
+  try { const d = await api("PATCH", "/tickets/" + id, silent ? { [field]: value, silent: true } : { [field]: value }); S.details[id] = d; mergeTicket(d.ticket); render(); return true; }
   catch (e) { render(); return false; }
 }
 async function sendMessage(type, closeAfter) {
@@ -278,7 +278,7 @@ function renderList() {
     </div>
     ${S.checked.size ? `<div class="bulkbar"><b>${S.checked.size} selected</b>
       <label class="sr" for="bAssign">Assign selected</label><select id="bAssign"><option value="__">Assign to…</option>${agentOpts(null, "Unassigned")}</select>
-      <label class="sr" for="bStatus">Set status</label><select id="bStatus"><option value="">Change status…</option>${opt(STATUSES)}</select>
+      <label class="sr" for="bStatus">Set status</label><select id="bStatus"><option value="">Change status…</option>${opt(STATUSES)}${S.user.isAdmin ? `<option value="__silent">Close without emailing</option>` : ""}</select>
       <button class="btn sm ghost" data-act="bulk-clear">Clear selection</button></div>` : ""}
     <div class="card table-card">
       ${list.length ? `<table class="tickets">
@@ -326,7 +326,7 @@ function renderDetail(t) {
       </div>
       <div class="dh-actions">
         ${me && t.assigneeEmail !== me.email && t.status !== "Closed" ? `<button class="btn" data-act="assign-me">${ico("user")}Assign to me</button>` : ""}
-        ${t.status === "Closed" ? `<button class="btn" data-act="reopen">${ico("refresh")}Reopen</button>` : `<button class="btn success" data-act="close">${ico("check")}Close ticket</button>`}
+        ${t.status === "Closed" ? `<button class="btn" data-act="reopen">${ico("refresh")}Reopen</button>` : `${S.user.isAdmin ? `<button class="btn ghost" data-act="closequiet" title="Close without emailing the requester">Close quietly</button>` : ""}<button class="btn success" data-act="close">${ico("check")}Close ticket</button>`}
       </div>
     </div>
     <div class="detail-grid">
@@ -557,6 +557,7 @@ root.addEventListener("click", async e => {
   if (a === "searchtoggle") { S.searchOpen = !S.searchOpen; render(); if (S.searchOpen) document.getElementById("q")?.focus(); return; }
   if (a === "assign-me") { await setField(S.selected, "assigneeEmail", S.user.email); toast("Assigned to you"); return; }
   if (a === "close") { if (await setField(S.selected, "status", "Closed")) toast("Ticket closed. The requester has been emailed."); return; }
+  if (a === "closequiet") { if (!confirm("Close this ticket without emailing the requester? They won’t get a resolved email or a feedback request.")) return; if (await setField(S.selected, "status", "Closed", true)) toast("Ticket closed. No email was sent."); return; }
   if (a === "reopen") { if (await setField(S.selected, "status", "Open")) toast("Ticket reopened"); return; }
   if (a === "new") openNew();
   else if (a === "settings") { S.page = "settings"; S.selected = null; S.userMenu = false; S.navOpen = false; render(); document.getElementById("main")?.scrollTo(0, 0); }
@@ -606,7 +607,15 @@ root.addEventListener("change", async e => {
   if (el.dataset.prate) { S.prate[Number(el.dataset.prate)] = Number(el.value); render(); return; }
   if (el.id === "sortSel") { S.sort = el.value; render(); return; }
   if (el.id === "bAssign" && el.value !== "__") { const v = el.value, ids = [...S.checked]; for (const id of ids) await setField(id, "assigneeEmail", v); toast(`${ids.length} tickets updated`); S.checked.clear(); render(); return; }
-  if (el.id === "bStatus" && el.value) { const v = el.value, ids = [...S.checked]; for (const id of ids) await setField(id, "status", v); toast(`${ids.length} tickets set to ${v}`); S.checked.clear(); render(); return; }
+  if (el.id === "bStatus" && el.value) {
+    const v = el.value, ids = [...S.checked];
+    if (v === "__silent") {
+      if (!confirm(`Close ${ids.length} ticket${ids.length > 1 ? "s" : ""} without emailing anyone? Requesters won’t get a resolved email or a feedback request. Use this to clean up tickets that shouldn’t have been created.`)) { render(); return; }
+      let n = 0; for (const id of ids) { if (await setField(id, "status", "Closed", true)) n++; toast(`Closing quietly… ${n} of ${ids.length}`); }
+      toast(`${n} tickets closed without emailing anyone`); S.checked.clear(); render(); return;
+    }
+    for (const id of ids) await setField(id, "status", v); toast(`${ids.length} tickets set to ${v}`); S.checked.clear(); render(); return;
+  }
   if (el.dataset.field && S.selected) {
     let v = el.value; const f = el.dataset.field;
     if (f === "dueAt") { v = new Date(v).getTime(); if (!v) return; }
@@ -761,10 +770,21 @@ function setBranding() {
   <section class="card section-card" style="margin-top:16px"><h2>Colours</h2><p>The desk uses ${esc(S.cfg.orgName)} navy for navigation and buttons, and green as the accent.</p>
     <div class="swatches"><span><i style="background:#0B2D5B"></i>Navy #0B2D5B</span><span><i style="background:#76B82A"></i>Green #76B82A</span></div></section>`;
 }
+function emailDraft() { if (!S.emDraft) S.emDraft = JSON.parse(JSON.stringify(S.settings.email || { intake: true, acknowledge: true, since: null })); return S.emDraft; }
 function setEmail() {
-  return `<section class="card section-card"><h2>Email</h2><p>Notifications are sent from, and requests are received at, the support mailbox.</p>
+  const d = emailDraft(); const dirty = JSON.stringify(d) !== JSON.stringify(S.settings.email);
+  return `<section class="card section-card"><h2>Requests by email</h2><p>Emails sent to <b>${esc(S.cfg.supportEmail)}</b> become tickets. Only emails that arrive after the start date are ever turned into tickets. Older emails in the mailbox are left alone.</p>
+    <label class="switch"><input type="checkbox" data-em="intake" ${d.intake ? "checked" : ""}><span>Create tickets from new emails</span></label>
+    <fieldset class="bh" ${d.intake ? "" : "disabled"}>
+      <div class="field" style="max-width:360px"><label for="emSince">Only process emails received after</label><input type="datetime-local" id="emSince" data-em="since" value="${d.since ? toLocalInput(Date.parse(d.since)) : ""}"><small>${d.since ? "Emails received before this are ignored." : "Set automatically the next time the mailbox is checked."}</small></div>
+      <label class="switch"><input type="checkbox" data-em="acknowledge" ${d.acknowledge ? "checked" : ""}><span>Send the sender an acknowledgement with their ticket number</span></label>
+    </fieldset>
+    <div class="savebar card" style="position:static;box-shadow:none"><span>${dirty ? "You have unsaved changes." : "All changes saved."}</span><span class="savebar-actions"><button class="btn" data-act="emreset" ${dirty ? "" : "disabled"}>Discard</button><button class="btn primary" data-act="emsave" ${dirty ? "" : "disabled"}>Save email settings</button></span></div>
+  </section>
+  <section class="card section-card" style="margin-top:16px"><h2>Mailbox</h2><p>Notifications are sent from, and requests are received at, the support mailbox.</p>
     <dl class="kv" style="max-width:560px"><dt>Mailbox</dt><dd><b>${esc(S.cfg.supportEmail)}</b></dd><dt>Checked</dt><dd>Every 5 minutes</dd><dt>Requesters get</dt><dd>Confirmation, replies, status changes and resolution</dd><dt>Agents get</dt><dd>New assignments and requester replies</dd></dl>
-    <div style="margin-top:18px"><button class="btn" data-act="mailcheck" ${S.mailChecking ? "disabled" : ""}>${ico("refresh")}${S.mailChecking ? "Checking…" : "Check mailbox now"}</button></div></section>`;
+    <div style="margin-top:18px"><button class="btn" data-act="mailcheck" ${S.mailChecking ? "disabled" : ""}>${ico("refresh")}${S.mailChecking ? "Checking…" : "Check mailbox now"}</button></div>
+    <p class="c-muted" style="font-size:13px;margin-top:14px">Emergency stop: setting the Netlify environment variable <code>MAIL_INTAKE</code> to <code>off</code> (then redeploying) stops all email intake, whatever these settings say.</p></section>`;
 }
 /* ---------- activity log & backups (admin) ---------- */
 const AUDIT_CATS = ["Access", "Ticket", "Email", "Feedback", "Settings", "Backup", "Audit"];
@@ -1058,10 +1078,11 @@ root.addEventListener("click", async e => {
   if (el.dataset.fbremove) { d.alertEmails = d.alertEmails.filter(x => x !== el.dataset.fbremove); render(); return; }
   const a = el.dataset.act;
   if (a === "fbaddemail") { const i = document.getElementById("fbAddEmail"); const v = (i.value || "").trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast("Enter a valid email address."); return; } if (!d.alertEmails.includes(v)) d.alertEmails = [...d.alertEmails, v]; render(); return; }
-  if (a === "fbreset") { S.fbDraft = null; render(); return; }
+  if (a === "fbreset") { S.fbDraft = null; S.emDraft = null; render(); return; }
   if (a === "fbsave") { try { const r = await api("PUT", "/settings", { feedback: d }); S.settings = { ...S.settings, ...r }; S.fbDraft = null; toast("Feedback settings saved"); } catch (e2) { } render(); }
 });
 root.addEventListener("input", e => { const t = e.target; if (!t.dataset.fb || t.type === "checkbox" || t.tagName === "SELECT") return; const d = fbDraft(); d[t.dataset.fb] = t.type === "number" ? Number(t.value) : t.value; const bar = document.querySelector(".savebar"); if (bar) { const dirty = JSON.stringify(d) !== JSON.stringify(S.settings.feedback); bar.querySelector("span").textContent = dirty ? "You have unsaved changes." : "All changes saved."; bar.querySelectorAll("button").forEach(b => b.disabled = !dirty); } const pv = document.querySelector(".fb-preview"); if (pv) { pv.querySelector("b").textContent = d.question; pv.querySelector("span").textContent = d.intro; } });
+root.addEventListener("change", e => { const t = e.target; if (!t.dataset.em) return; const d = emailDraft(); if (t.type === "checkbox") d[t.dataset.em] = t.checked; else if (t.dataset.em === "since") { const ms = new Date(t.value).getTime(); d.since = ms ? new Date(ms).toISOString() : null; } render(); });
 root.addEventListener("change", e => { const t = e.target; if (!t.dataset.fb) return; const d = fbDraft(); if (t.type === "checkbox") d[t.dataset.fb] = t.checked; else if (t.tagName === "SELECT") d[t.dataset.fb] = Number(t.value); else return; render(); });
 
 async function saveSettingsPart(part, msg) {
@@ -1076,10 +1097,10 @@ async function runDirSearch() {
 }
 function setPath(obj, path, val) { const k = path.split("."); let o = obj; for (let i = 0; i < k.length - 1; i++) o = o[k[i]]; o[k[k.length - 1]] = val; }
 root.addEventListener("click", async e => {
-  const el = e.target.closest("[data-stab],[data-pick],[data-uremove],[data-dremove],[data-holremove],[data-act^='u'],[data-act^='sla'],[data-act^='hol'],[data-act^='dept'],[data-act^='logo'],[data-act='mailcheck']");
+  const el = e.target.closest("[data-stab],[data-pick],[data-uremove],[data-dremove],[data-holremove],[data-act^='u'],[data-act^='sla'],[data-act^='hol'],[data-act^='dept'],[data-act^='logo'],[data-act='mailcheck'],[data-act^='em']");
   if (el && el.dataset.act === "logexport") { exportAudit(); return; }
   if (!el || !S.user || !S.user.isAdmin) return;
-  if (el.dataset.stab) { S.stab = el.dataset.stab; if (S.stab === "audit") S.auditRows = null; if (S.stab === "backups") S.backups = null; S.fbDraft = null; render(); return; }
+  if (el.dataset.stab) { S.stab = el.dataset.stab; if (S.stab === "audit") S.auditRows = null; if (S.stab === "backups") S.backups = null; S.fbDraft = null; S.emDraft = null; render(); return; }
   if (el.dataset.pick != null) { const p = S.dir[Number(el.dataset.pick)]; S.unew = { ...S.unew, name: p.name, email: p.email }; S.uq = ""; S.dir = []; render(); document.getElementById("uRole")?.focus(); return; }
   const users = S.settings.users || [];
   if (el.dataset.uremove) {
@@ -1108,7 +1129,9 @@ root.addEventListener("click", async e => {
     await saveSettingsPart({ departments: [...S.settings.departments, v] }, `${v} added`); return;
   }
   if (a === "logoremove") { if (!confirm("Remove the logo? The desk and emails will show the name as text instead.")) return; try { const r = await api("DELETE", "/brand/logo"); S.settings = { ...S.settings, ...r }; toast("Logo removed"); } catch (e2) { } render(); return; }
-  if (a === "mailcheck") { S.mailChecking = true; render(); try { const r = await api("POST", "/mail/check"); toast(`Mailbox checked: ${r.created} new tickets, ${r.replies} replies added.`); await loadAgent(); } catch (e2) { } S.mailChecking = false; render(); return; }
+  if (a === "emreset") { S.emDraft = null; render(); return; }
+  if (a === "emsave") { const d = emailDraft(); await saveSettingsPart({ email: d }, "Email settings saved"); S.emDraft = null; render(); return; }
+  if (a === "mailcheck") { S.mailChecking = true; render(); try { const r = await api("POST", "/mail/check"); toast(r.disabled ? `Email intake is off: ${r.disabled}.` : r.started ? "Email intake started. Only emails from now on will become tickets." : `Mailbox checked: ${r.created} new tickets, ${r.replies} replies added.`); await loadAgent(); } catch (e2) { } S.mailChecking = false; render(); return; }
 });
 root.addEventListener("input", e => {
   const t = e.target; if (!S.user || !S.user.isAdmin) return;
