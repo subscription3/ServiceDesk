@@ -187,6 +187,19 @@ Then open http://localhost:8888. The scheduled email check doesn't run locally, 
 
 ---
 
+## Requests by email: what gets picked up
+
+Only emails that arrive in the support mailbox **after the email start date** become tickets. The first mailbox check after installing or upgrading sets that date to "now", so an existing backlog is never processed. Older emails, read or unread, are left exactly as they are.
+
+In **Settings → Email**, admins can:
+- switch email intake on or off
+- switch the acknowledgement email ("We've received your request") on or off
+- change the start date
+
+**Emergency stop:** set the Netlify environment variable `MAIL_INTAKE` to `off` and redeploy. This stops all email intake, whatever the settings say. Remove the variable (and redeploy) to start again.
+
+**Cleaning up unwanted tickets:** select them in a ticket list, then choose **Close without emailing** in the status menu (admins only). Nobody receives a resolved email or a feedback request. The **Close quietly** button on a ticket page does the same for one ticket. Both are recorded in the activity log.
+
 ## Settings (admins only)
 
 Open **Settings** in the side navigation. It has five sections:
