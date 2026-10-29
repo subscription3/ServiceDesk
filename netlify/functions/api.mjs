@@ -37,6 +37,7 @@ function settingsDiff(before, after) {
   }
   if (after.sla && JSON.stringify(after.sla) !== JSON.stringify(before.sla)) d.sla = { before: before.sla, after: after.sla };
   if (after.feedback && JSON.stringify(after.feedback) !== JSON.stringify(before.feedback)) d.feedback = { before: before.feedback, after: after.feedback };
+  if (after.email && JSON.stringify(after.email) !== JSON.stringify(before.email)) d.email = { before: before.email, after: after.email };
   return d;
 }
 function summarise(d) {
@@ -47,6 +48,7 @@ function summarise(d) {
   if (d.departmentsAdded || d.departmentsRemoved) parts.push("changed departments");
   if (d.sla) parts.push("changed the SLA policy");
   if (d.feedback) parts.push("changed feedback settings");
+  if (d.email) parts.push("changed email settings");
   return parts.length ? parts.join(", ") : "saved settings without changes";
 }
 
@@ -117,7 +119,7 @@ export default async (req, context) => {
       requireAdmin(user);
       const b = await readBody(req);
       const input = {};
-      for (const k of ["departments", "users", "sla", "feedback"]) if (k in b) input[k] = b[k];
+      for (const k of ["departments", "users", "sla", "feedback", "email"]) if (k in b) input[k] = b[k];
       const before = await getSettings(true);
       const after = await saveSettings(input);
       const diff = settingsDiff(before, Object.fromEntries(Object.keys(input).map((k) => [k, after[k]])));
@@ -173,14 +175,16 @@ export default async (req, context) => {
         requireAgent(user);
         const before = await getTicket(id);
         if (!before) throw httpError(404, "That ticket no longer exists.");
-        const patch = await readBody(req);
-        const d = await updateTicket(id, patch, user);
+        const { silent, ...patch } = await readBody(req);
+        if (silent) requireAdmin(user);
+        const d = await updateTicket(id, patch, user, { silent: !!silent });
         const changes = {};
         for (const [k, v] of Object.entries(patch)) {
           const old = before[k];
           if (JSON.stringify(old) !== JSON.stringify(v)) changes[k] = { from: old ?? null, to: v };
         }
-        if (Object.keys(changes).length) await audit(user, `Updated ticket #${before.number}: ${Object.keys(changes).join(", ")}`, { category: "Ticket", targetType: "Ticket", targetId: before.number, details: changes, info });
+        if (silent) changes.notifications = "not sent (closed without emailing)";
+        if (Object.keys(changes).length) await audit(user, `Updated ticket #${before.number}${silent ? " without emailing" : ""}: ${Object.keys(changes).filter((k) => k !== "notifications").join(", ")}`, { category: "Ticket", targetType: "Ticket", targetId: before.number, details: changes, info });
         return json(d);
       }
       if (!m[2] && method === "DELETE") {
@@ -230,7 +234,7 @@ export default async (req, context) => {
     if (path === "/mail/check" && method === "POST") {
       requireAgent(user);
       const r = await pollInbox({ max: 8 });
-      await audit(user, `Checked the support mailbox: ${r.created} new tickets, ${r.replies} replies`, { category: "Email", details: r, info });
+      await audit(user, r.disabled ? `Checked the support mailbox: intake is off (${r.disabled})` : `Checked the support mailbox: ${r.created} new tickets, ${r.replies} replies`, { category: "Email", details: r, info });
       return json(r);
     }
     if (path === "/audit" && method === "GET") {
