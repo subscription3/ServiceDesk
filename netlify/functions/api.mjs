@@ -10,6 +10,8 @@ import { decodeLogo, uploadLogo, downloadLogo, deleteLogoFiles, searchDirectory 
 import { pollInbox } from "../../lib/inbox.mjs";
 import { audit, listAudit, requestInfo } from "../../lib/audit.mjs";
 import { verifyFeedbackToken, saveFeedback, getFeedback, listFeedback, RATINGS } from "../../lib/feedback.mjs";
+import { decodeFile, saveAttachment, getAttachment, readAttachment, removeAttachment } from "../../lib/attachments.mjs";
+import { changeContext, listChanges, getChange, createChange, updateChange, changeAction, CHANGE_TYPES, RISK_LEVELS, PRIORITIES as CHANGE_PRIORITIES } from "../../lib/changes.mjs";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -38,6 +40,8 @@ function settingsDiff(before, after) {
   if (after.sla && JSON.stringify(after.sla) !== JSON.stringify(before.sla)) d.sla = { before: before.sla, after: after.sla };
   if (after.feedback && JSON.stringify(after.feedback) !== JSON.stringify(before.feedback)) d.feedback = { before: before.feedback, after: after.feedback };
   if (after.email && JSON.stringify(after.email) !== JSON.stringify(before.email)) d.email = { before: before.email, after: after.email };
+  if (after.systems && JSON.stringify(after.systems) !== JSON.stringify(before.systems)) d.systems = { before: before.systems, after: after.systems };
+  if (after.changeAccess && JSON.stringify(after.changeAccess) !== JSON.stringify(before.changeAccess)) d.changeAccess = { before: before.changeAccess, after: after.changeAccess };
   return d;
 }
 function summarise(d) {
@@ -49,6 +53,8 @@ function summarise(d) {
   if (d.sla) parts.push("changed the SLA policy");
   if (d.feedback) parts.push("changed feedback settings");
   if (d.email) parts.push("changed email settings");
+  if (d.systems) parts.push("changed the systems register");
+  if (d.changeAccess) parts.push("changed change-management access");
   return parts.length ? parts.join(", ") : "saved settings without changes";
 }
 
@@ -119,7 +125,7 @@ export default async (req, context) => {
       requireAdmin(user);
       const b = await readBody(req);
       const input = {};
-      for (const k of ["departments", "users", "sla", "feedback", "email"]) if (k in b) input[k] = b[k];
+      for (const k of ["departments", "users", "sla", "feedback", "email", "systems", "changeAccess"]) if (k in b) input[k] = b[k];
       const before = await getSettings(true);
       const after = await saveSettings(input);
       const diff = settingsDiff(before, Object.fromEntries(Object.keys(input).map((k) => [k, after[k]])));
@@ -214,6 +220,76 @@ export default async (req, context) => {
         const alerted = await afterFeedback(pre.ticket, fb);
         await audit(user, `${fb.updated ? "Updated" : "Submitted"} feedback for ticket #${pre.ticket.number}: ${fb.rating}/5`, { category: "Feedback", targetType: "Ticket", targetId: pre.ticket.number, details: { rating: fb.rating, comment: fb.comment, via: "Portal", lowRatingAlertSentTo: alerted }, info });
         return json(await getDetail(id, { ...user, isAgent: false }));
+      }
+    }
+
+    /* ---------- attachments ---------- */
+    if (path === "/attachments" && method === "POST") {
+      const b = await readBody(req);
+      let parentNumber, internal = false;
+      if (b.parentType === "Ticket") {
+        const d = await getDetail(Number(b.parentId), user); // checks the person may see the ticket
+        if (!user.isAgent && d.ticket.requesterEmail !== user.email) throw httpError(404, "That ticket no longer exists.");
+        parentNumber = d.ticket.number; internal = !!b.internal && user.isAgent;
+      } else if (b.parentType === "Change") {
+        const d = await getChange(Number(b.parentId), user);
+        parentNumber = d.change.ref;
+      } else throw httpError(400, "Unknown attachment target.");
+      const file = decodeFile(b.fileName, b.dataUrl);
+      const a = await saveAttachment({ parentType: b.parentType, parentId: Number(b.parentId), parentNumber, internal, user }, file);
+      await audit(user, `Attached “${a.name}” to ${b.parentType === "Ticket" ? "ticket #" : ""}${parentNumber}${internal ? " (internal)" : ""}`, { category: b.parentType === "Ticket" ? "Ticket" : "Change", targetType: b.parentType, targetId: parentNumber, details: { file: a.name, bytes: a.size, type: a.type, internal }, info });
+      return json(a, 201);
+    }
+    const am = path.match(/^\/attachments\/(\d+)$/);
+    if (am) {
+      const a = await getAttachment(Number(am[1]));
+      if (!a) throw httpError(404, "That file no longer exists.");
+      let label;
+      if (a.parentType === "Ticket") {
+        const d = await getDetail(a.parentId, user);
+        if (!user.isAgent && (a.internal || d.ticket.requesterEmail !== user.email)) throw httpError(404, "That file no longer exists.");
+        label = `ticket #${d.ticket.number}`;
+      } else { const d = await getChange(a.parentId, user); label = d.change.ref; }
+      if (method === "GET") {
+        const buf = await readAttachment(a);
+        await audit(user, `Downloaded “${a.name}” from ${label}`, { category: a.parentType === "Ticket" ? "Ticket" : "Change", targetType: a.parentType, targetId: label, details: { file: a.name }, info });
+        return new Response(buf, { headers: { "Content-Type": a.type || "application/octet-stream", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(a.name)}`, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store" } });
+      }
+      if (method === "DELETE") {
+        if (a.byEmail !== user.email && !user.isAdmin) throw httpError(403, "Only the person who uploaded a file, or an admin, can remove it.");
+        await removeAttachment(a);
+        await audit(user, `Removed “${a.name}” from ${label}`, { category: a.parentType === "Ticket" ? "Ticket" : "Change", targetType: a.parentType, targetId: label, details: { file: a.name, uploadedBy: a.by }, info });
+        return json({ ok: true });
+      }
+    }
+
+    /* ---------- change management ---------- */
+    if (path === "/changes/me" && method === "GET") {
+      const { s, p } = await changeContext(user);
+      return json({ perms: p, systems: s.systems.map((x) => ({ name: x.name, description: x.description, owners: x.owners.map((o) => o.name) })), types: CHANGE_TYPES, risks: RISK_LEVELS, priorities: CHANGE_PRIORITIES });
+    }
+    if (path === "/changes" && method === "GET") return json(await listChanges(user));
+    if (path === "/changes" && method === "POST") {
+      const c = await createChange(await readBody(req), user);
+      await audit(user, `Created change ${c.ref} (draft)`, { category: "Change", targetType: "Change", targetId: c.ref, details: { title: c.title, system: c.system }, info });
+      return json(await getChange(c.id, user), 201);
+    }
+    const cm = path.match(/^\/changes\/(\d+)(\/action)?$/);
+    if (cm) {
+      const id = Number(cm[1]);
+      if (!cm[2] && method === "GET") return json(await getChange(id, user));
+      if (!cm[2] && method === "PATCH") {
+        const b = await readBody(req);
+        const c = await updateChange(id, b, user);
+        await audit(user, `Edited change ${c.ref}`, { category: "Change", targetType: "Change", targetId: c.ref, details: { fields: Object.keys(b) }, info });
+        return json(await getChange(id, user));
+      }
+      if (cm[2] && method === "POST") {
+        const b = await readBody(req);
+        const before = (await getChange(id, user)).change;
+        const r = await changeAction(id, String(b.action || ""), b.comment, user);
+        await audit(user, `${before.ref}: ${r.label}`, { category: "Change", targetType: "Change", targetId: before.ref, details: { action: b.action, from: r.before, to: r.after, comment: b.comment || "" }, info });
+        return json(await getChange(id, user));
       }
     }
 
