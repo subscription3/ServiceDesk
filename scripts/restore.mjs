@@ -9,7 +9,7 @@ import { getSiteId, LISTS, queryItems, createItem, updateItem } from "../lib/lis
 import { restoreColumns } from "../lib/schema.mjs";
 import { audit } from "../lib/audit.mjs";
 
-const FILES = { tickets: "tickets.json", messages: "ticket-messages.json", events: "ticket-events.json", feedback: "feedback.json", settings: "settings.json", audit: "activity-log.json" };
+const FILES = { tickets: "tickets.json", messages: "ticket-messages.json", events: "ticket-events.json", feedback: "feedback.json", settings: "settings.json", audit: "activity-log.json", changes: "changes.json", changeHistory: "change-history.json", attachments: "attachments.json" };
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
 async function pool(items, n, fn) {
@@ -32,13 +32,14 @@ async function main() {
     console.log(`  hash ${f.name}: ${ok ? "OK" : "MISMATCH"}`);
     if (!ok) throw new Error(`${f.name} doesn’t match its recorded hash. The file may have been changed; restore stopped.`);
   }
-  const data = Object.fromEntries(Object.entries(FILES).map(([k, n]) => [k, JSON.parse(fs.readFileSync(path.join(dir, n), "utf8")).items]));
+  // Backups taken before change management existed don't have the newer files.
+  const data = Object.fromEntries(Object.entries(FILES).map(([k, n]) => [k, fs.existsSync(path.join(dir, n)) ? JSON.parse(fs.readFileSync(path.join(dir, n), "utf8")).items : []]));
 
   // 2. Safety: the target lists must be empty.
   const sid = await getSiteId();
   const site = await graph(`/sites/${sid}?$select=webUrl`);
   console.log(`Restoring into ${site.webUrl}`);
-  for (const k of ["tickets", "messages", "events", "feedback"]) {
+  for (const k of ["tickets", "messages", "events", "feedback", "changes"]) {
     const n = (await queryItems(k)).length;
     if (n) throw new Error(`The list "${LISTS[k]}" on the target site already has ${n} items. Restore only into empty lists (a new site, or after clearing them).`);
   }
@@ -73,6 +74,20 @@ async function main() {
   await related("messages");
   await related("events");
   await related("feedback");
+  const changeMap = new Map();
+  await pool(data.changes, 4, async (row) => {
+    const item = await createItem("changes", { ...pick("changes", row), ChangeNumber: Number(row.ChangeNumber) || 1000 + Number(row.id), OpenedAt: row.OpenedAt || row.Created });
+    changeMap.set(Number(row.id), Number(item.id));
+  });
+  console.log(`  changes: ${data.changes.length}`);
+  await pool(data.changeHistory, 4, async (row) => { const cid = changeMap.get(Number(row.ChangeId)); if (cid) await createItem("changeHistory", { ...pick("changeHistory", row), ChangeId: cid }); });
+  console.log(`  change history: ${data.changeHistory.length}`);
+  // Attachment records keep pointing at the original files in the SharePoint library.
+  await pool(data.attachments, 4, async (row) => {
+    const pid = (row.ParentType === "Change" ? changeMap : idMap).get(Number(row.ParentId));
+    if (pid) await createItem("attachments", { ...pick("attachments", row), ParentId: pid });
+  });
+  console.log(`  attachment records: ${data.attachments.length}`);
   await pool(data.audit, 4, async (row) => { await createItem("audit", { ...pick("audit", row), OccurredAt: row.OccurredAt || row.Created }); });
   console.log(`  activity log: ${data.audit.length}`);
 

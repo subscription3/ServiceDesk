@@ -12,6 +12,7 @@ const ROOT = "ServiceDeskBackups";
 const FILES = [
   ["tickets", "tickets.json"], ["messages", "ticket-messages.json"], ["events", "ticket-events.json"],
   ["feedback", "feedback.json"], ["settings", "settings.json"], ["audit", "activity-log.json"],
+  ["changes", "changes.json"], ["changeHistory", "change-history.json"], ["attachments", "attachments.json"],
 ];
 const SYSTEM_FIELDS = new Set(["@odata.etag", "ContentType", "Edit", "LinkTitleNoMenu", "LinkTitle", "DocIcon", "ItemChildCount", "FolderChildCount", "_UIVersionString", "_ComplianceFlags", "_ComplianceTag", "_ComplianceTagWrittenTime", "_ComplianceTagUserId", "AppAuthorLookupId", "AppEditorLookupId", "Attachments"]);
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
@@ -79,6 +80,13 @@ async function main() {
     ["Assignee", (r) => r.AssigneeName], ["Opened", (r) => r.OpenedAt || r.Created], ["Resolution due", (r) => r.DueAt], ["First response", (r) => r.FirstResponseAt], ["Closed", (r) => r.ClosedAt],
   ]), "utf8");
   files.push({ name: "tickets.csv", list: "SD Tickets (spreadsheet view)", rows: ticketsRows.length, bytes: ticketsCsv.length, sha256: sha256(ticketsCsv), buf: ticketsCsv, type: "text/csv" });
+  const changeRows = JSON.parse(files.find((f) => f.name === "changes.json").buf.toString()).items;
+  const changesCsv = Buffer.from(csv(changeRows, [
+    ["Change", (r) => `CHG-${r.ChangeNumber}`], ["Title", (r) => r.Title], ["System", (r) => r.SystemName], ["Type", (r) => r.ChangeType], ["Priority", (r) => r.Priority], ["Risk", (r) => r.RiskLevel],
+    ["Status", (r) => r.Status], ["Requester", (r) => r.RequesterName], ["Planned", (r) => r.PlannedStart], ["Technical owner approval (Head of IT)", (r) => String(r.ItApprover || "").split("|")[0]], ["Technical owner approved at", (r) => r.ItApprovedAt],
+    ["System owner approval", (r) => String(r.BusinessApprover || "").split("|")[0]], ["System owner approved at", (r) => r.BusinessApprovedAt], ["Completed", (r) => r.CompletedAt],
+  ]), "utf8");
+  files.push({ name: "changes.csv", list: "SD Changes (spreadsheet view)", rows: changeRows.length, bytes: changesCsv.length, sha256: sha256(changesCsv), buf: changesCsv, type: "text/csv" });
 
   // Upload, then download again and compare hashes to prove the stored copy is intact.
   for (const f of files) {
@@ -115,6 +123,7 @@ async function main() {
 <tr><th>Manifest SHA-256</th><td><code>${manifestHash}</code></td></tr></table>
 <h2>Files</h2><table><tr><th>File</th><th>Contents</th><th>Records</th><th>Size (bytes)</th><th>SHA-256</th><th>Verified</th></tr>
 ${manifest.files.map((f) => `<tr><td>${esc(f.name)}</td><td>${esc(f.list)}</td><td>${f.rows}</td><td>${f.bytes}</td><td><code>${f.sha256}</code></td><td class="${f.verified ? "ok" : "bad"}">${f.verified ? "Yes" : "No"}</td></tr>`).join("")}</table>
+<p>Attached files themselves stay in the SharePoint library <code>ServiceDeskAttachments</code>, which is covered by SharePoint version history and the site’s retention policy. This backup records each file’s name, size, uploader and location.</p>
 <h2>How to check this backup independently</h2><p>Download any file and compare its SHA-256 hash with the table above. On Windows: <code>certutil -hashfile tickets.json SHA256</code>. On macOS or Linux: <code>shasum -a 256 tickets.json</code>. The same hashes are recorded in the service desk activity log${run.runUrl ? " and in the GitHub Actions run log" : ""}, so a changed file can always be detected.</p>
 <h2>How to restore</h2><p>Follow “Restoring from a backup” in the project README. A restore recreates every list, keeps the original ticket numbers and dates, and checks every hash before it starts.</p>
 </body></html>`);
