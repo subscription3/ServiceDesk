@@ -14,7 +14,7 @@ const S = {
   my: [], myEvents: [], myDetails: {}, ptab: "new", psel: null, pconfirm: null, bellOpen: false,
   pform: {}, preply: {}, perr: "", psending: false, seen: loadSeen(),
   prate: {}, prComment: {}, prEdit: {}, recentFb: null, fbLoading: false, af: null, auditRows: null, auditLoading: false, backups: null, backupsLoading: false,
-  emDraft: null, rp: null, allFb: null, allFbLoading: false, fbDraft: null, loadError: "",
+  cm: null, upInternal: false, uploadingTo: null, pfiles: [], cfiles: [], emDraft: null, rp: null, allFb: null, allFbLoading: false, fbDraft: null, loadError: "",
   stab: "users", uq: "", dir: [], dirAvailable: null, unew: { name: "", email: "", role: "Agent" }, slaDraft: null, uploading: false, mailChecking: false,
   logoOk: false, navOpen: false, searchOpen: false, userMenu: false,
 };
@@ -121,6 +121,7 @@ async function submitRequest() {
   try {
     const d = await api("POST", "/tickets", { subject: g("subject"), description: g("description"), name: g("name") || S.user.name, phone: g("phone"), department: g("department"), priority: g("priority") || "Medium" });
     S.myDetails[d.ticket.id] = d; S.my.unshift(d.ticket); S.pconfirm = d.ticket.id;
+    if ((S.pfiles || []).length) { const files = S.pfiles; S.pfiles = []; await uploadFiles("Ticket", d.ticket.id, files, false); }
     S.pform = { name: f.name, phone: f.phone, department: f.department };
     loadMine().then(render).catch(() => { });
   } catch (e) { }
@@ -235,6 +236,7 @@ function renderDesk() {
   else if (S.page === "portal") content = `<div class="page in-desk">${renderPortalBody(true)}</div>`;
   else if (S.page === "settings") content = renderSettingsPage();
   else if (S.page === "reports") content = renderReports();
+  else if (S.page === "changes") content = `<div class="page">${renderChanges(true)}</div>`;
   else content = renderContacts();
   return `<div class="shell">
     <header class="topbar">
@@ -253,6 +255,7 @@ function renderDesk() {
       ${navItem("data-page", "reports", "Reports", "chart")}
       <h2>Tickets</h2>
       ${VIEWS.map(v => navItem("data-view", v[0], v[1], v[2], counts[v[0]], v[0] === "overdue" && counts.overdue > 0)).join("")}
+      ${S.cm && S.cm.me && S.cm.me.perms.any ? `<h2>Change management</h2>${navItem("data-page", "changes", "Changes", "refresh", cmNeedsMe() || null, cmNeedsMe() > 0)}` : ""}
       <h2>Directory</h2>
       ${navItem("data-page", "contacts", "Requesters", "users")}
       ${navItem("data-page", "portal", "Request portal", "globe")}
@@ -359,6 +362,7 @@ function renderDetail(t) {
           <div class="field"><label for="pDue">Resolution due</label><input id="pDue" type="datetime-local" data-field="dueAt" value="${toLocalInput(t.dueAt)}"></div>
           <div class="field"><label for="pTags">Tags</label><input id="pTags" data-field="tags" value="${esc(t.tags.join(", "))}" placeholder="Separate with commas"></div>
         </section>
+        <section><h3>Attachments${d && d.attachments && d.attachments.length ? ` (${d.attachments.length})` : ""}</h3>${d ? attList(d.attachments, { canUpload: true, type: "Ticket", id: t.id, internalOption: true }) : `<p class="c-muted">Loading…</p>`}</section>
         <section><h3>Requester</h3>
           <div class="c-who" style="margin-bottom:10px;max-width:none"><span class="avatar lg req-av">${esc(initials(t.requesterName || t.requesterEmail))}</span><b>${esc(t.requesterName)}</b></div>
           <dl class="kv">${t.requesterEmail ? `<dt>Email</dt><dd><a href="mailto:${esc(t.requesterEmail)}">${esc(t.requesterEmail)}</a></dd>` : ""}${t.requesterPhone ? `<dt>Phone</dt><dd>${esc(t.requesterPhone)}</dd>` : ""}<dt>Tickets</dt><dd><button class="btn sm" data-contact="${esc(contactKey(t))}">View all ${S.tickets.filter(x => contactKey(x) === contactKey(t)).length}</button></dd></dl>
@@ -443,12 +447,13 @@ function renderPortalPage() {
       <nav class="portal-nav" aria-label="Portal">
         <button data-ptab="new" aria-current="${S.ptab === "new"}">${ico("plus")}<span class="txt"> New request</span></button>
         <button data-ptab="mine" aria-current="${S.ptab === "mine"}">${ico("list")}<span class="txt"> My requests</span></button>
+        ${S.cm && S.cm.me && S.cm.me.perms.any ? `<button data-ptab="changes" aria-current="${S.ptab === "changes"}">${ico("refresh")}<span class="txt"> Changes</span>${cmNeedsMe() ? `<span class="pill-count">${cmNeedsMe()}</span>` : ""}</button>` : ""}
         <button class="bell" data-act="bell" aria-label="Updates${total ? `, ${total} unread` : ""}" aria-expanded="${S.bellOpen}">${ico("bell")}${total ? `<span class="count">${total}</span>` : ""}</button>
         ${userMenu()}
       </nav>
     </header>
     <section class="hero"><div class="hero-inner"><h1>How can we help, ${esc(S.user.name.split(" ")[0])}?</h1><p>Raise a request with the support team and follow it from start to finish. We’ll email you at ${esc(S.user.email)} each time there’s an update.</p></div></section>
-    <div class="p-wrap">${renderPortalBody(false)}</div>
+    <div class="p-wrap">${S.ptab === "changes" ? `<div class="card section-card">${renderChanges(false)}</div>` : renderPortalBody(false)}</div>
     <footer class="portal-foot"><div><span>© ${new Date().getFullYear()} ${esc(S.cfg.orgName)}</span><span>Need help another way? Email <a href="mailto:${esc(S.cfg.supportEmail)}">${esc(S.cfg.supportEmail)}</a></span></div></footer>
   </div>`;
 }
@@ -494,6 +499,7 @@ function portalForm() {
       <div class="field full"><label for="pf-desc">Describe the issue <span class="req">*</span></label><textarea id="pf-desc" data-pf="description" rows="6" placeholder="What happened, when it started and anything you’ve already tried">${pv("description")}</textarea></div>
       <div class="field"><label for="pf-name">Your name</label><input id="pf-name" data-pf="name" value="${esc(S.pform.name ?? S.user.name)}" maxlength="120" autocomplete="name"></div>
       <div class="field"><label for="pf-phone">Phone (optional)</label><input id="pf-phone" data-pf="phone" type="tel" value="${pv("phone")}" maxlength="40" autocomplete="tel"></div>
+      <div class="field full"><span class="flabel">Screenshots or documents (optional)</span><label class="btn sm" for="pfFiles">${ico("plus")}Choose files</label><input type="file" id="pfFiles" multiple class="sr" accept="${ATT_EXT.map(e => "." + e).join(",")}">${(S.pfiles || []).length ? `<ul class="att-list" style="margin-top:8px">${S.pfiles.map(f => `<li><span class="att-ico">${esc(fileIcon(f.name))}</span><span class="att-main">${esc(f.name)}<small>${fsize(f.size)}</small></span></li>`).join("")}</ul>` : ""}<small>Up to 4 MB each.</small></div>
     </div>
     <div class="c-actions"><button type="submit" class="btn primary" ${S.psending ? "disabled" : ""}>${S.psending ? "Sending…" : "Submit request"}</button></div></form>`;
 }
@@ -528,6 +534,7 @@ function portalDetail(id) {
       <textarea id="pr-${id}" data-preply="${id}">${esc(S.preply[id] || "")}</textarea>
       <div class="c-actions"><button class="btn primary" data-act="preply" data-id="${id}">Send reply</button></div>
     </div></section>
+    <section class="p-section"><h3>Attachments</h3>${d ? attList(d.attachments, { canUpload: true, type: "Ticket", id, empty: "No files attached yet. You can add screenshots or documents to help the team." }) : ""}</section>
     ${st === "Closed" && d ? portalRating(id, d.feedback) : ""}
     <section class="p-section"><h3>Updates</h3><ul class="timeline">${d ? [...d.events].reverse().map(e => `<li><time>${fmt(e.at)}</time>${esc(e.text)}</li>`).join("") : ""}</ul></section>
   </article>`;
@@ -542,10 +549,10 @@ root.addEventListener("click", async e => {
   if (el.dataset.checkall != null) { e.stopPropagation(); const ids = visible().map(t => t.id); if (el.checked) ids.forEach(id => S.checked.add(id)); else S.checked.clear(); render(); return; }
   if (el.dataset.view || el.dataset.page || el.dataset.contact != null) S.navOpen = false;
   if (el.dataset.check != null) { e.stopPropagation(); const id = Number(el.dataset.check); el.checked ? S.checked.add(id) : S.checked.delete(id); render(); return; }
-  if (el.dataset.ptab) { S.ptab = el.dataset.ptab; S.psel = null; S.pconfirm = null; S.bellOpen = false; render(); return; }
+  if (el.dataset.ptab) { S.ptab = el.dataset.ptab; S.psel = null; S.pconfirm = null; S.bellOpen = false; if (S.ptab === "changes") { const c = cmState(); c.sel = null; c.edit = null; loadChanges().then(render); } render(); return; }
   if (el.dataset.popen) { const id = Number(el.dataset.popen); S.ptab = "mine"; S.psel = id; S.pconfirm = null; S.bellOpen = false; markSeen([id]); render(); window.scrollTo(0, 0); loadMyDetail(id); return; }
   if (el.dataset.view) { S.page = "tickets"; S.view = el.dataset.view; S.search = ""; if (el.dataset.sort) S.sort = el.dataset.sort; S.contact = null; S.checked.clear(); S.selected = null; S.search = ""; render(); return; }
-  if (el.dataset.page) { S.page = el.dataset.page; S.selected = null; render(); document.getElementById("main")?.scrollTo(0, 0); if (S.page === "portal") loadMine().then(render).catch(() => { }); return; }
+  if (el.dataset.page) { S.page = el.dataset.page; S.selected = null; if (S.page === "changes") { const c = cmState(); c.sel = null; c.edit = null; loadChanges().then(render); } render(); document.getElementById("main")?.scrollTo(0, 0); if (S.page === "portal") loadMine().then(render).catch(() => { }); return; }
   if (el.dataset.open) { if (e.target.closest("input")) return; S.page = "tickets"; S.selected = Number(el.dataset.open); S.dtab = "conversation"; render(); document.getElementById("main")?.scrollTo(0, 0); loadDetail(S.selected); return; }
   if (el.dataset.tab) { S.dtab = el.dataset.tab; S._scrollThread = true; render(); return; }
   if (el.dataset.cmode) { S.cmode = el.dataset.cmode; render(); document.getElementById("cBody")?.focus(); return; }
@@ -675,8 +682,8 @@ function addBusinessTime(startMs, hours, sla) {
 function slaDraft() { if (!S.slaDraft) S.slaDraft = JSON.parse(JSON.stringify(S.settings.sla)); return S.slaDraft; }
 function renderSettingsPage() {
   if (!S.user.isAdmin) return `<div class="page"><div class="card empty"><h3>Admins only</h3><p>Ask a service desk admin to change settings.</p></div></div>`;
-  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["feedback", "Feedback", "star"], ["branding", "Branding", "edit"], ["email", "Email", "mail"], ["audit", "Activity log", "shield"], ["backups", "Backups", "refresh"]];
-  const body = { users: setUsers, sla: setSla, departments: setDepartments, feedback: setFeedback, branding: setBranding, email: setEmail, audit: setAudit, backups: setBackups }[S.stab] || setUsers;
+  const tabs = [["users", "Users", "users"], ["sla", "SLA policy", "clock"], ["departments", "Departments", "list"], ["feedback", "Feedback", "star"], ["systems", "Systems", "list"], ["changeaccess", "Change access", "shield"], ["branding", "Branding", "edit"], ["email", "Email", "mail"], ["audit", "Activity log", "shield"], ["backups", "Backups", "refresh"]];
+  const body = { users: setUsers, sla: setSla, departments: setDepartments, feedback: setFeedback, systems: setSystems, changeaccess: setChangeAccess, branding: setBranding, email: setEmail, audit: setAudit, backups: setBackups }[S.stab] || setUsers;
   return `<div class="page">
     <div class="page-head"><div><h1>Settings</h1><p>Manage who works on the desk, response targets and how the desk looks.</p></div></div>
     <div class="settings-layout">
@@ -861,6 +868,286 @@ function setBackups() {
         <li>To back up on demand, open GitHub → Actions → <b>Nightly backup</b> → Run workflow. To prove a restore works, run <b>Restore test</b> into an empty test site.</li>
       </ul></section>`;
 }
+/* ---------- attachments ---------- */
+const ATT_EXT = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "vsdx", "txt", "csv", "log", "png", "jpg", "jpeg", "gif", "msg", "eml", "zip"];
+function fsize(b) { return b < 1024 ? b + " B" : b < 1048576 ? Math.round(b / 1024) + " KB" : (b / 1048576).toFixed(1) + " MB"; }
+function fileIcon(n) { const e = (n.split(".").pop() || "").toLowerCase(); return /png|jpe?g|gif/.test(e) ? "IMG" : e.slice(0, 4).toUpperCase(); }
+function attList(atts, opts) {
+  opts = opts || {};
+  const up = opts.canUpload ? `<div class="att-up"><label class="btn sm" for="up-${opts.type}-${opts.id}">${ico("plus")}Attach files</label><input type="file" multiple class="sr" id="up-${opts.type}-${opts.id}" data-upload="${opts.type}:${opts.id}" accept="${ATT_EXT.map(e => "." + e).join(",")}">${opts.internalOption ? `<label class="chk"><input type="checkbox" id="upInternal" ${S.upInternal ? "checked" : ""}> Internal (agents only)</label>` : ""}${S.uploadingTo === opts.type + ":" + opts.id ? `<span class="c-muted">Uploading…</span>` : ""}</div>` : "";
+  return `${up}${atts && atts.length ? `<ul class="att-list">${atts.map(a => `<li><span class="att-ico">${esc(fileIcon(a.name))}</span><span class="att-main"><button class="linkish att-name" data-dl="${a.id}" data-name="${esc(a.name)}">${esc(a.name)}</button><small>${fsize(a.size)}, ${esc(a.by)}, ${ago(a.at)}${a.internal ? ` <span class="tag">Internal</span>` : ""}</small></span>${a.byEmail === S.user.email || S.user.isAdmin ? `<button class="att-del" data-attdel="${a.id}" aria-label="Remove ${esc(a.name)}">×</button>` : ""}</li>`).join("")}</ul>` : `<p class="c-muted att-none">${opts.empty || "No files attached."}</p>`}
+    <p class="c-muted att-hint">PDF, Office documents, images, text, CSV, Outlook messages or ZIP, up to 4 MB each.</p>`;
+}
+async function uploadFiles(type, id, files, internal) {
+  const list = [...files]; let ok = 0;
+  S.uploadingTo = type + ":" + id; render();
+  for (const f of list) {
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    if (!ATT_EXT.includes(ext)) { toast(`${f.name}: files of type .${ext} can’t be attached.`); continue; }
+    if (f.size > 4 * 1024 * 1024) { toast(`${f.name} is larger than 4 MB.`); continue; }
+    const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+    try { await api("POST", "/attachments", { parentType: type, parentId: id, fileName: f.name, dataUrl, internal: !!internal }); ok++; } catch (e) { }
+  }
+  S.uploadingTo = null;
+  if (ok) toast(`${ok} file${ok > 1 ? "s" : ""} attached`);
+  await refreshParent(type, id);
+}
+async function refreshParent(type, id) {
+  if (type === "Change") await loadChange(id);
+  else if (S.user.isAgent && S.page === "tickets") await loadDetail(id);
+  else await loadMyDetail(id);
+  render();
+}
+async function downloadAttachment(id, name) {
+  try {
+    const tok = await idToken(false);
+    const r = await fetch("/api/attachments/" + id, { headers: { Authorization: "Bearer " + tok } });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "The file couldn’t be downloaded."); }
+    const blob = await r.blob();
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (e) { toast(e.message); }
+}
+root.addEventListener("change", e => {
+  const t = e.target;
+  if (t.id === "upInternal") { S.upInternal = t.checked; return; }
+  if (t.dataset.upload && t.files && t.files.length) { const [type, id] = t.dataset.upload.split(":"); uploadFiles(type, Number(id), t.files, type === "Ticket" && S.user.isAgent && S.upInternal); }
+  if (t.id === "pfFiles") { S.pfiles = [...t.files]; render(); }
+  if (t.id === "cfFiles") { S.cfiles = [...t.files]; render(); }
+});
+root.addEventListener("click", async e => {
+  const dl = e.target.closest("[data-dl]"); if (dl) { downloadAttachment(Number(dl.dataset.dl), dl.dataset.name); return; }
+  const del = e.target.closest("[data-attdel]");
+  if (del) {
+    if (!confirm("Remove this file? It will be deleted from SharePoint. The removal is recorded in the activity log.")) return;
+    try { await api("DELETE", "/attachments/" + del.dataset.attdel); toast("File removed"); } catch (e2) { return; }
+    if (S.page === "changes" || S.ptab === "changes") { if (S.cm.sel) await loadChange(S.cm.sel); }
+    else if (S.user.isAgent && S.page === "tickets" && S.selected) await loadDetail(S.selected);
+    else if (S.psel) await loadMyDetail(S.psel);
+    render();
+  }
+});
+
+/* ---------- change management ---------- */
+const CST = { DRAFT: "Draft", TECH: "Awaiting technical owner", SYS: "Awaiting system owner", APPROVED: "Approved", IMPL: "In implementation", UAT: "Awaiting UAT", UATFAIL: "UAT failed", DONE: "Completed", ROLLED: "Rolled back", REJECTED: "Rejected", CANCELLED: "Cancelled" };
+const CST_CLASS = { "Draft": "cs-grey", "Awaiting technical owner": "cs-amber", "Awaiting system owner": "cs-amber", "Approved": "cs-blue", "In implementation": "cs-violet", "Awaiting UAT": "cs-amber", "UAT failed": "cs-red", "Completed": "cs-green", "Rolled back": "cs-red", "Rejected": "cs-red", "Cancelled": "cs-grey" };
+const ACTION_LABEL = { submit: "Submit for approval", approve: "Approve", sendback: "Send back for more information", reject: "Reject", cancel: "Cancel request", start: "Start implementation", implemented: "Mark as implemented", rollback: "Record rollback", uat_pass: "UAT passed", uat_fail: "UAT failed", reimplement: "Return to implementation" };
+const NEEDS_ME = ["approve", "start", "implemented", "uat_pass", "reimplement"];
+function cbadge(st) { return `<span class="badge ${CST_CLASS[st] || "cs-grey"}">${esc(st)}</span>`; }
+function cmState() { if (!S.cm) S.cm = { me: null, list: null, view: "", sel: null, edit: null, det: {}, f: { status: "", system: "", q: "" }, comment: "", busy: false }; return S.cm; }
+async function loadChangeMe() { const c = cmState(); try { c.me = await api("GET", "/changes/me"); } catch (e) { c.me = { perms: { any: false }, systems: [] }; } }
+async function loadChanges() { const c = cmState(); try { c.list = await api("GET", "/changes"); } catch (e) { c.list = c.list || []; } }
+async function loadChange(id) { const c = cmState(); try { c.det[id] = await api("GET", "/changes/" + id); } catch (e) { } }
+function cmNeedsMe() { const c = cmState(); return (c.list || []).filter(x => x.actions && x.actions.some(a => NEEDS_ME.includes(a))).length; }
+function toMs(v) { const t = new Date(v).getTime(); return t || null; }
+function renderChanges(inDesk) {
+  const c = cmState(); const me = c.me;
+  if (!me) return `<div class="spinner">Loading…</div>`;
+  if (!me.perms.any) return `<div class="card empty"><h3>Change management isn’t available to you</h3><p>Ask a service desk admin to give you access in Settings → Change access.</p></div>`;
+  if (!c.list) { loadChanges().then(render); return `<div class="spinner">Loading change requests…</div>`; }
+  if (c.edit) return changeForm();
+  if (c.sel) return changeDetail(c.sel);
+  return changeList(inDesk);
+}
+function changeList(inDesk) {
+  const c = cmState(), p = c.me.perms;
+  const views = [["needs", `Needs my action`], ["mine", "My requests"], ...(p.canViewAll || p.ownedSystems.length ? [["all", p.canViewAll ? "All changes" : "My systems"]] : [])];
+  if (!c.view) c.view = cmNeedsMe() ? "needs" : "mine";
+  let list = c.list;
+  if (c.view === "needs") list = list.filter(x => x.actions.some(a => NEEDS_ME.includes(a)));
+  if (c.view === "mine") list = list.filter(x => x.requesterEmail === S.user.email);
+  if (c.f.status) list = list.filter(x => x.status === c.f.status);
+  if (c.f.system) list = list.filter(x => x.system === c.f.system);
+  const q = c.f.q.trim().toLowerCase().replace(/^chg-/, "");
+  if (q) list = list.filter(x => [x.number, x.title, x.system, x.requesterName, x.description].join(" ").toLowerCase().includes(q));
+  return `${inDesk ? "" : ""}<div class="page-head"><div><h1>Change management</h1><p>Request, approve and track changes to InfraCredit’s systems.</p></div>
+      ${p.canRaise ? `<button class="btn primary" data-act="cnew">${ico("plus")}New change request</button>` : ""}</div>
+    <nav class="rp-tabs" role="tablist">${views.map(v => `<button role="tab" data-cview="${v[0]}" aria-selected="${c.view === v[0]}">${v[1]}${v[0] === "needs" && cmNeedsMe() ? ` <span class="pill-count">${cmNeedsMe()}</span>` : ""}</button>`).join("")}</nav>
+    <div class="card rp-filters">
+      <div class="field"><label for="cfStatus">Status</label><select id="cfStatus" data-cf="status"><option value="">Any status</option>${Object.values(CST).map(s2 => `<option${c.f.status === s2 ? " selected" : ""}>${s2}</option>`).join("")}</select></div>
+      <div class="field"><label for="cfSystem">System</label><select id="cfSystem" data-cf="system"><option value="">All systems</option>${c.me.systems.map(x => `<option${c.f.system === x.name ? " selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div>
+      <div class="field" style="flex:1;min-width:220px"><label for="cfQ">Search</label><input id="cfQ" type="search" data-cf="q" value="${esc(c.f.q)}" placeholder="CHG number, title, requester"></div>
+    </div>
+    <div class="card table-card">${list.length ? `<table class="dtable"><thead><tr><th>Change</th><th>Title</th><th class="hide-sm">System</th><th class="hide-md">Type</th><th class="hide-md">Priority</th><th class="hide-lg">Planned</th><th>Status</th><th class="hide-lg">Requested by</th></tr></thead><tbody>
+      ${list.map(x => `<tr data-copen="${x.id}" tabindex="0"><td class="c-num">${esc(x.ref)}</td><td><b>${esc(x.title)}</b>${x.actions.some(a => NEEDS_ME.includes(a)) ? ` <span class="tag tag-action">Your action</span>` : ""}</td><td class="hide-sm">${esc(x.system)}</td><td class="hide-md">${esc(x.changeType)}</td><td class="hide-md">${esc(x.priority)}</td><td class="hide-lg c-muted">${x.plannedStart ? fmt(x.plannedStart) : "—"}</td><td>${cbadge(x.status)}</td><td class="hide-lg">${esc(x.requesterName)}</td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty"><h3>${c.view === "needs" ? "Nothing needs your action" : "No change requests here"}</h3><p>${c.view === "needs" ? "Changes waiting for your approval, implementation or UAT sign-off appear here." : p.canRaise ? "Raise a change request to get a change approved before it’s made." : "Change requests you can see appear here."}</p>${p.canRaise && c.view !== "needs" ? `<button class="btn primary" data-act="cnew">${ico("plus")}New change request</button>` : ""}</div>`}</div>`;
+}
+function changeForm() {
+  const c = cmState(), d = c.edit, m = c.me;
+  const sys = m.systems.find(x => x.name === d.system);
+  const ta = (k, label, ph, req) => `<div class="field full"><label for="cf-${k}">${label}${req ? ` <span class="req">*</span>` : ""}</label><textarea id="cf-${k}" data-cform="${k}" rows="4" placeholder="${esc(ph || "")}">${esc(d[k] || "")}</textarea></div>`;
+  return `<nav class="crumbs" aria-label="Breadcrumb"><button data-act="cback">Change management</button><span aria-hidden="true">/</span><span>${d.id ? esc(d.ref) : "New change request"}</span></nav>
+    <div class="page-head"><div><h1>${d.id ? `Edit ${esc(d.ref)}` : "New change request"}</h1><p>Fields marked <span class="req">*</span> are needed before you can submit for approval. You can save a draft at any time.</p></div></div>
+    ${c.formErr ? `<p class="err" role="alert">${esc(c.formErr)}</p>` : ""}
+    <section class="card section-card"><h2>Change description</h2>
+      <div class="cols">
+        <div class="field full"><label for="cf-title">Title <span class="req">*</span></label><input id="cf-title" data-cform="title" maxlength="200" value="${esc(d.title || "")}" placeholder="For example: Upgrade Finance ERP to version 12"></div>
+        <div class="field"><label for="cf-system">Name of system <span class="req">*</span></label><select id="cf-system" data-cform="system"><option value="">Choose a system…</option>${m.systems.map(x => `<option${d.system === x.name ? " selected" : ""}>${esc(x.name)}</option>`).join("")}</select><small>${sys ? `System owner: ${esc(sys.owners.join(", ") || "not set")}. The Head of IT approves first, then the system owner.` : m.systems.length ? "" : "No systems yet. An admin adds them in Settings → Systems."}</small></div>
+        <div class="field"><label for="cf-initiator">Change initiator <span class="req">*</span></label><input id="cf-initiator" data-cform="initiator" maxlength="120" value="${esc(d.initiator ?? S.user.name)}"></div>
+        <div class="field"><label for="cf-start">Planned date and time <span class="req">*</span></label><input type="datetime-local" id="cf-start" data-cform="plannedStart" value="${d.plannedStart ? toLocalInput(d.plannedStart) : ""}"></div>
+        <div class="field"><label for="cf-end">Expected end (optional)</label><input type="datetime-local" id="cf-end" data-cform="plannedEnd" value="${d.plannedEnd ? toLocalInput(d.plannedEnd) : ""}"></div>
+        <div class="field"><label for="cf-type">Change type <span class="req">*</span></label><select id="cf-type" data-cform="changeType">${m.types.map(x => `<option${(d.changeType || "Normal") === x ? " selected" : ""}>${x}</option>`).join("")}</select><small>${{ Standard: "Low risk, routine and pre-approved in principle.", Normal: "Planned change that goes through full review.", Emergency: "Urgent fix to restore service or close a security gap." }[d.changeType || "Normal"]}</small></div>
+        <div class="field"><label for="cf-risk">Risk level <span class="req">*</span></label><select id="cf-risk" data-cform="riskLevel"><option value="">Choose…</option>${m.risks.map(x => `<option${d.riskLevel === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>
+        ${ta("description", "Change description", "What will change, and what will users notice?", true)}
+        ${ta("reason", "Reason for change", "Why is this change needed? What happens if it isn’t made?", true)}
+        ${ta("riskMitigation", "Risk and mitigation", "What could go wrong, and how will you reduce or handle it?", true)}
+      </div></section>
+    <section class="card section-card" style="margin-top:16px"><h2>Change requirements</h2>
+      <div class="cols">
+        ${ta("implementationPlan", "Implementation plan", "Step-by-step plan, who does each step and how long it takes", true)}
+        ${ta("rollbackPlan", "Rollback plan", "How the change will be reversed if it fails", true)}
+        <div class="field"><label for="cf-prio">Change priority</label><select id="cf-prio" data-cform="priority">${m.priorities.map(x => `<option${(d.priority || "Medium") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>
+        <div class="field"><span class="flabel">Change requester</span><div class="ro">${esc(d.requesterName || S.user.name)}</div></div>
+        <div class="field"><span class="flabel">Does this change require UAT?</span><div class="seg" role="radiogroup"><button type="button" data-cuat="yes" aria-pressed="${!!d.requiresUat}">Yes</button><button type="button" data-cuat="no" aria-pressed="${!d.requiresUat}">No</button></div><small>If yes, the requester or system owner signs off user acceptance testing before the change is closed.</small></div>
+      </div></section>
+    <section class="card section-card" style="margin-top:16px"><h2>Supporting documents</h2>
+      ${d.id ? attList((c.det[d.id] || {}).attachments, { canUpload: true, type: "Change", id: d.id }) : `<label class="btn sm" for="cfFiles">${ico("plus")}Choose files</label><input type="file" id="cfFiles" multiple class="sr" accept="${ATT_EXT.map(e => "." + e).join(",")}">${(S.cfiles || []).length ? `<ul class="att-list" style="margin-top:8px">${S.cfiles.map(f => `<li><span class="att-ico">${esc(fileIcon(f.name))}</span><span class="att-main">${esc(f.name)}<small>${fsize(f.size)}</small></span></li>`).join("")}</ul>` : `<p class="c-muted att-hint">Attach test plans, vendor notes or screenshots (up to 4 MB each).</p>`}`}
+    </section>
+    <div class="savebar card"><span>${c.busy ? "Saving…" : "Drafts are only visible to you until you submit them."}</span><span class="savebar-actions"><button class="btn" data-act="ccancel-edit">Cancel</button><button class="btn" data-act="csave" ${c.busy ? "disabled" : ""}>Save draft</button><button class="btn primary" data-act="csubmit" ${c.busy ? "disabled" : ""}>Submit for approval</button></span></div>`;
+}
+function changeDetail(id) {
+  const c = cmState(), d = c.det[id];
+  if (!d) { loadChange(id).then(render); return `<div class="spinner">Loading…</div>`; }
+  const x = d.change, acts = d.actions.filter(a => a !== "edit");
+  const neg = [CST.REJECTED, CST.CANCELLED, CST.ROLLED].includes(x.status);
+  const steps = ["Submitted", "Technical owner", "System owner", "Implementation", ...(x.requiresUat ? ["UAT"] : []), "Completed"];
+  const order = { [CST.DRAFT]: -1, [CST.TECH]: 1, [CST.SYS]: 2, [CST.APPROVED]: 3, [CST.IMPL]: 3, [CST.UAT]: 4, [CST.UATFAIL]: 4, [CST.DONE]: steps.length - 1 };
+  const idx = neg ? -2 : order[x.status] ?? 0;
+  const sys = c.me.systems.find(s2 => s2.name === x.system);
+  const sect = (title, rows) => `<section class="card section-card cd-sect"><h2>${title}</h2><dl class="cd-dl">${rows.map(([k, v, long]) => `<dt>${k}</dt><dd${long ? ' class="long"' : ""}>${v}</dd>`).join("")}</dl></section>`;
+  const txt = v => v ? esc(v) : `<span class="c-muted">Not given</span>`;
+  const role = d.actions.includes("approve") ? (x.status === CST.TECH ? "You’re reviewing this as technical owner (Head of IT). The system owner reviews it after you." : `You’re reviewing this as system owner of ${esc(x.system)}. The technical owner has already approved it.`) : d.actions.includes("implemented") || d.actions.includes("start") ? "You’re the change manager for this change." : d.actions.includes("uat_pass") ? "Please confirm whether user acceptance testing passed." : "";
+  return `<nav class="crumbs" aria-label="Breadcrumb"><button data-act="cback">Change management</button><span aria-hidden="true">/</span><span>${esc(x.ref)}</span></nav>
+    <div class="detail-head">
+      <div><div class="dh-meta"><b>${esc(x.ref)}</b><span>${esc(x.system)}</span><span>Raised ${fmt(x.createdAt)} by ${esc(x.requesterName)}</span></div>
+        <h1>${esc(x.title)}</h1><div class="dh-badges">${cbadge(x.status)}<span class="tag">${esc(x.changeType)}</span><span class="tag">${esc(x.priority)} priority</span>${x.riskLevel ? `<span class="tag">${esc(x.riskLevel)} risk</span>` : ""}</div></div>
+      <div class="dh-actions">${d.actions.includes("edit") ? `<button class="btn" data-act="cedit">${ico("edit")}Edit</button>` : ""}<button class="btn" data-act="cprint">Print record</button></div>
+    </div>
+    ${x.status === CST.DRAFT ? "" : `<div class="tracker ${neg ? "neg" : ""}" style="grid-template-columns:repeat(${steps.length},1fr)">${steps.map((s2, i) => `<div class="step ${i <= idx ? "done" : ""} ${i === idx ? "cur" : ""}">${esc(s2)}</div>`).join("")}</div>${neg ? `<p class="err" style="margin-top:6px">${esc(x.status)}. See the history below for the reason.</p>` : ""}`}
+    ${acts.length ? `<section class="card section-card action-card"><h2>Your action</h2>${role ? `<p>${role}</p>` : ""}
+      <div class="field"><label for="cComment">Comment${acts.some(a => ["sendback", "reject", "rollback", "uat_fail", "cancel"].includes(a)) ? " (needed to send back, reject, roll back, fail UAT or cancel)" : ""}</label><textarea id="cComment" data-ccomment rows="3" placeholder="${d.actions.includes("implemented") ? "Implementation notes: what was done and when" : "Add a note for the record"}">${esc(c.comment)}</textarea></div>
+      <div class="c-actions" style="justify-content:flex-start">${acts.map(a => `<button class="btn ${["approve", "submit", "start", "implemented", "uat_pass"].includes(a) ? "primary" : ["reject", "rollback", "uat_fail"].includes(a) ? "danger" : ""}" data-caction="${a}" ${c.busy ? "disabled" : ""}>${ACTION_LABEL[a]}</button>`).join("")}</div></section>` : ""}
+    <div class="detail-grid">
+      <div>
+        ${sect("Change description", [["Name of system", esc(x.system)], ["Planned date", x.plannedStart ? fmt(x.plannedStart) + (x.plannedEnd ? ` to ${fmt(x.plannedEnd)}` : "") : txt("")], ["Change initiator", txt(x.initiator)], ["Change type", esc(x.changeType)], ["Change description", txt(x.description), 1], ["Reason for change", txt(x.reason), 1], ["Risk level", txt(x.riskLevel)], ["Risk and mitigation", txt(x.riskMitigation), 1]])}
+        ${sect("Change requirements", [["Implementation plan", txt(x.implementationPlan), 1], ["Rollback plan", txt(x.rollbackPlan), 1], ["Change priority", esc(x.priority)], ["Change requester", `${esc(x.requesterName)} <span class="c-muted">${esc(x.requesterEmail)}</span>`], ["Requires UAT", x.requiresUat ? "Yes" : "No"]])}
+        ${x.implementationNotes || x.uatNotes ? sect("Implementation and testing", [["Implementation notes", txt(x.implementationNotes), 1], ...(x.requiresUat ? [["UAT notes", txt(x.uatNotes), 1]] : [])]) : ""}
+      </div>
+      <aside>
+        <section class="card props"><h3>Approvals</h3>
+          <div class="appr ${x.itApprovedAt ? "ok" : ""}"><b>1. Technical owner (Head of IT)</b>${x.itApprovedAt ? `<span>Approved by ${esc(x.itApprover)}<br>${fmt(x.itApprovedAt)}</span>` : `<span class="c-muted">${x.status === CST.TECH ? "Waiting for approval" : "Pending"}</span>`}</div>
+          <div class="appr ${x.businessApprovedAt ? "ok" : ""}"><b>2. System owner</b>${x.businessApprovedAt ? `<span>Approved by ${esc(x.businessApprover)}<br>${fmt(x.businessApprovedAt)}</span>` : `<span class="c-muted">${x.status === CST.SYS ? "Waiting for " : "After technical approval: "}${esc(sys ? sys.owners.join(" or ") || "no owner set" : "—")}</span>`}</div>
+          <p class="c-muted" style="font-size:12.5px;margin:10px 0 0">Separation of duties: the requester can’t approve their own change, and one person can’t give both approvals.</p>
+        </section>
+        <section class="card props" style="margin-top:16px"><h3>Supporting documents</h3>${attList(d.attachments, { canUpload: ![CST.REJECTED, CST.CANCELLED].includes(x.status), type: "Change", id: x.id })}</section>
+        <section class="card props" style="margin-top:16px"><h3>History</h3><ul class="timeline">${[...d.history].reverse().map(h => `<li><time>${fmt(h.at)}</time><b>${esc(h.action)}</b> by ${esc(h.by)}${h.comment ? `<blockquote class="hist-c">${esc(h.comment)}</blockquote>` : ""}</li>`).join("")}</ul></section>
+      </aside>
+    </div>`;
+}
+async function saveChange(submit) {
+  const c = cmState(), d = c.edit;
+  if (!(d.title || "").trim()) { c.formErr = "Give the change a short title."; render(); return; }
+  c.busy = true; c.formErr = ""; render();
+  const body = { title: d.title, system: d.system || "", plannedStart: d.plannedStart || 0, plannedEnd: d.plannedEnd || 0, initiator: d.initiator ?? S.user.name, changeType: d.changeType || "Normal", description: d.description || "", reason: d.reason || "", riskLevel: d.riskLevel || "", riskMitigation: d.riskMitigation || "", implementationPlan: d.implementationPlan || "", rollbackPlan: d.rollbackPlan || "", priority: d.priority || "Medium", requiresUat: !!d.requiresUat };
+  try {
+    let r = d.id ? await api("PATCH", "/changes/" + d.id, body) : await api("POST", "/changes", body);
+    const id = r.change.id;
+    if (!d.id && (S.cfiles || []).length) { const files = S.cfiles; S.cfiles = []; await uploadFiles("Change", id, files, false); }
+    if (submit) {
+      try { r = await api("POST", `/changes/${id}/action`, { action: "submit" }); toast(`${r.change.ref} submitted. The Head of IT has been emailed for technical approval.`); }
+      catch (e) { c.det[id] = await api("GET", "/changes/" + id); c.edit = { ...c.det[id].change }; c.formErr = e.message; c.busy = false; await loadChanges(); render(); return; }
+    } else toast(`${r.change.ref} saved as a draft`);
+    c.det[id] = r; c.edit = null; c.sel = id; await loadChanges();
+  } catch (e) { c.formErr = e.message; }
+  c.busy = false; render(); document.getElementById("main")?.scrollTo(0, 0); window.scrollTo(0, 0);
+}
+root.addEventListener("click", async e => {
+  const el = e.target.closest("[data-copen],[data-cview],[data-caction],[data-cuat],[data-act='cnew'],[data-act='cback'],[data-act='cedit'],[data-act='csave'],[data-act='csubmit'],[data-act='ccancel-edit'],[data-act='cprint']");
+  if (!el) return; const c = cmState();
+  if (el.dataset.copen) { c.sel = Number(el.dataset.copen); c.comment = ""; render(); loadChange(c.sel).then(render); document.getElementById("main")?.scrollTo(0, 0); return; }
+  if (el.dataset.cview) { c.view = el.dataset.cview; render(); return; }
+  if (el.dataset.cuat) { c.edit.requiresUat = el.dataset.cuat === "yes"; render(); return; }
+  if (el.dataset.caction) {
+    const a = el.dataset.caction, x = c.det[c.sel].change;
+    if (["sendback", "reject", "rollback", "uat_fail", "cancel"].includes(a) && !c.comment.trim()) { toast("Add a comment explaining why."); document.getElementById("cComment")?.focus(); return; }
+    if (["reject", "cancel", "rollback"].includes(a) && !confirm(`${ACTION_LABEL[a]} for ${x.ref}? This can’t be undone.`)) return;
+    c.busy = true; render();
+    try { c.det[c.sel] = await api("POST", `/changes/${c.sel}/action`, { action: a, comment: c.comment }); c.comment = ""; toast(`${x.ref}: ${c.det[c.sel].change.status}`); await loadChanges(); } catch (e2) { }
+    c.busy = false; render(); return;
+  }
+  const a = el.dataset.act;
+  if (a === "cnew") { c.edit = { title: "", initiator: S.user.name, changeType: "Normal", priority: "Medium", requiresUat: false }; S.cfiles = []; c.formErr = ""; render(); return; }
+  if (a === "cback") { c.sel = null; c.edit = null; render(); return; }
+  if (a === "cedit") { c.edit = { ...c.det[c.sel].change }; c.formErr = ""; render(); return; }
+  if (a === "ccancel-edit") { c.edit = null; c.formErr = ""; render(); return; }
+  if (a === "csave") { saveChange(false); return; }
+  if (a === "csubmit") { saveChange(true); return; }
+  if (a === "cprint") { window.print(); return; }
+});
+root.addEventListener("input", e => {
+  const t = e.target, c = cmState();
+  if (t.dataset.cform && t.tagName !== "SELECT" && t.type !== "datetime-local") c.edit[t.dataset.cform] = t.value;
+  if (t.dataset.ccomment != null) c.comment = t.value;
+  if (t.dataset.cf === "q") { c.f.q = t.value; render(); }
+});
+root.addEventListener("change", e => {
+  const t = e.target, c = cmState();
+  if (t.dataset.cform && (t.tagName === "SELECT" || t.type === "datetime-local")) { c.edit[t.dataset.cform] = t.type === "datetime-local" ? toMs(t.value) : t.value; render(); }
+  if (t.dataset.cf && t.dataset.cf !== "q") { c.f[t.dataset.cf] = t.value; render(); }
+});
+root.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("tr[data-copen]")) { e.preventDefault(); e.target.click(); } });
+
+/* ---------- settings: systems register and change access ---------- */
+function setSystems() {
+  const sys = S.settings.systems || []; const users = S.settings.users || [];
+  return `<section class="card section-card"><h2>Systems register</h2><p>Every change request is for one of these systems. The Head of IT approves each change first as technical owner, then the system owner gives the second approval. If a system has more than one owner, any one of them can approve.</p>
+    <div class="addrow" style="max-width:640px"><input id="sysName" placeholder="System name, e.g. Finance ERP" maxlength="120" aria-label="System name"><input id="sysDesc" placeholder="Short description (optional)" maxlength="300" aria-label="Description"><button class="btn primary" data-act="sysadd">${ico("plus")}Add system</button></div></section>
+    ${sys.length ? sys.map((x, i) => `<section class="card section-card sys-card" style="margin-top:12px"><div class="panel-head"><div><h2 style="margin:0">${esc(x.name)}</h2>${x.description ? `<p class="c-muted" style="margin:2px 0 0">${esc(x.description)}</p>` : ""}</div><button class="btn sm danger" data-sysdel="${i}">Remove system</button></div>
+      <span class="flabel">System owners</span>
+      <div class="chips">${x.owners.length ? x.owners.map((o, j) => `<span>${esc(o.name)} <small class="c-muted">${esc(o.email)}</small><button data-ownerdel="${i}:${j}" aria-label="Remove ${esc(o.name)}">×</button></span>`).join("") : `<small class="bad-txt">No system owner yet. Changes to this system can’t be submitted until one is added.</small>`}</div>
+      <div class="addrow" style="max-width:640px"><input id="own-n-${i}" placeholder="Owner’s full name" maxlength="80" aria-label="Owner name" list="ownUsers"><input id="own-e-${i}" type="email" placeholder="Owner’s work email" maxlength="160" aria-label="Owner email"><button class="btn" data-owneradd="${i}">Add owner</button></div>
+    </section>`).join("") + `<datalist id="ownUsers">${users.map(u => `<option value="${esc(u.name)}">`).join("")}</datalist>` : `<div class="card empty" style="margin-top:12px"><h3>No systems yet</h3><p>Add the systems that change requests can be raised for, such as your ERP, core banking or email.</p></div>`}`;
+}
+const CROLE = [["Raise", "Raise changes"], ["ViewAll", "View all changes"], ["HeadOfIT", "Head of IT (technical owner)"], ["ChangeManager", "Change manager"]];
+function setChangeAccess() {
+  const a = S.settings.changeAccess || { raise: "all", people: [] };
+  return `<section class="card section-card"><h2>Who can raise change requests</h2>
+      <div class="radio-col"><label><input type="radio" name="craise" value="all" data-craise ${a.raise === "all" ? "checked" : ""}> Everyone in ${esc(S.cfg.orgName)}</label><label><input type="radio" name="craise" value="listed" data-craise ${a.raise === "listed" ? "checked" : ""}> Only people below with “Raise changes”</label></div></section>
+    <section class="card section-card" style="margin-top:16px"><h2>Change roles</h2><p>System owners are set per system in <b>Systems</b>. These roles are for everything else.</p>
+      <dl class="kv" style="margin-bottom:14px"><dt>Raise changes</dt><dd>Can create change requests (when only listed people may)</dd><dt>View all changes</dt><dd>Can see every change request, read only</dd><dt>Head of IT (technical owner)</dt><dd>Gives the first approval, before the system owner</dd><dt>Change manager</dt><dd>Starts implementation, records completion or rollback</dd></dl>
+      <div class="addrow" style="max-width:640px"><input id="carN" placeholder="Full name" maxlength="80" aria-label="Name" list="ownUsers2"><input id="carE" type="email" placeholder="Work email" maxlength="160" aria-label="Email"><button class="btn primary" data-act="caradd">${ico("plus")}Add person</button></div><datalist id="ownUsers2">${(S.settings.users || []).map(u => `<option value="${esc(u.name)}">`).join("")}</datalist>
+    </section>
+    <section class="card table-card" style="margin-top:12px">${a.people.length ? `<table class="dtable"><thead><tr><th>Person</th>${CROLE.map(r => `<th class="hide-sm">${r[1]}</th>`).join("")}<th><span class="sr">Actions</span></th></tr></thead><tbody>
+      ${a.people.map((p, i) => `<tr style="cursor:default"><td><b>${esc(p.name)}</b><br><span class="c-muted">${esc(p.email)}</span></td>${CROLE.map(r => `<td><label class="chk"><input type="checkbox" data-crole="${i}:${r[0]}" ${p.roles.includes(r[0]) ? "checked" : ""}><span class="sr">${r[1]} for ${esc(p.name)}</span></label></td>`).join("")}<td style="text-align:right"><button class="btn sm danger" data-cardel="${i}">Remove</button></td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty"><h3>No one has a change role yet</h3><p>Add at least one Head of IT (technical owner) and one change manager.</p></div>`}</section>
+    <div class="notice" style="margin-top:16px">${ico("shield")}<span>Separation of duties is enforced by the server: the Head of IT approves first and the system owner second, nobody can approve their own change, the person who gave the technical approval can’t also give the system owner approval, and only change managers can implement, close or roll back changes.</span></div>`;
+}
+async function saveCA(next, msg) { await saveSettingsPart({ changeAccess: next }, msg); loadChangeMe().then(render); }
+async function saveSys(next, msg) { await saveSettingsPart({ systems: next }, msg); loadChangeMe().then(render); }
+root.addEventListener("click", async e => {
+  const el = e.target.closest("[data-sysdel],[data-ownerdel],[data-owneradd],[data-cardel],[data-act='sysadd'],[data-act='caradd']");
+  if (!el || !S.user.isAdmin) return;
+  const sys = JSON.parse(JSON.stringify(S.settings.systems || [])); const ca = JSON.parse(JSON.stringify(S.settings.changeAccess || { raise: "all", people: [] }));
+  const okE = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  if (el.dataset.act === "sysadd") { const n = document.getElementById("sysName").value.trim(), dsc = document.getElementById("sysDesc").value.trim(); if (!n) { toast("Enter the system’s name."); return; } if (sys.some(x => x.name.toLowerCase() === n.toLowerCase())) { toast("That system is already listed."); return; } sys.push({ name: n, description: dsc, owners: [] }); await saveSys(sys, `${n} added. Now add its system owner.`); return; }
+  if (el.dataset.sysdel != null) { const x = sys[Number(el.dataset.sysdel)]; if (!confirm(`Remove ${x.name} from the register? Existing change requests keep their system name.`)) return; sys.splice(Number(el.dataset.sysdel), 1); await saveSys(sys, `${x.name} removed`); return; }
+  if (el.dataset.owneradd != null) { const i = Number(el.dataset.owneradd); const n = document.getElementById("own-n-" + i).value.trim(); let em = document.getElementById("own-e-" + i).value.trim().toLowerCase(); const u = (S.settings.users || []).find(x => x.name === n); if (!em && u) em = u.email; if (!n || !okE(em)) { toast("Enter the owner’s full name and work email."); return; } if (sys[i].owners.some(o => o.email === em)) { toast("Already an owner of this system."); return; } sys[i].owners.push({ name: n, email: em }); await saveSys(sys, `${n} is now a system owner of ${sys[i].name}`); return; }
+  if (el.dataset.ownerdel) { const [i, j] = el.dataset.ownerdel.split(":").map(Number); const o = sys[i].owners[j]; sys[i].owners.splice(j, 1); await saveSys(sys, `${o.name} removed as owner of ${sys[i].name}`); return; }
+  if (el.dataset.act === "caradd") { const n = document.getElementById("carN").value.trim(); let em = document.getElementById("carE").value.trim().toLowerCase(); const u = (S.settings.users || []).find(x => x.name === n); if (!em && u) em = u.email; if (!n || !okE(em)) { toast("Enter the person’s full name and work email."); return; } if (ca.people.some(p => p.email === em)) { toast("That person is already listed."); return; } ca.people.push({ name: n, email: em, roles: ["ViewAll"] }); await saveCA(ca, `${n} added. Tick the roles they need.`); return; }
+  if (el.dataset.cardel != null) { const p = ca.people[Number(el.dataset.cardel)]; if (!confirm(`Remove ${p.name}’s change roles?`)) return; ca.people.splice(Number(el.dataset.cardel), 1); await saveCA(ca, `${p.name} removed`); return; }
+});
+root.addEventListener("change", async e => {
+  const t = e.target; if (!S.user?.isAdmin) return;
+  const ca = JSON.parse(JSON.stringify(S.settings.changeAccess || { raise: "all", people: [] }));
+  if (t.dataset.craise != null) { ca.raise = t.value; await saveCA(ca, t.value === "all" ? "Everyone can now raise change requests" : "Only listed people can now raise change requests"); return; }
+  if (t.dataset.crole) {
+    const [i, r] = t.dataset.crole.split(":"); const p = ca.people[Number(i)];
+    p.roles = t.checked ? [...new Set([...p.roles, r])] : p.roles.filter(x => x !== r);
+    if (!p.roles.length) { if (!confirm(`${p.name} will have no change roles left and will be removed from this list. Continue?`)) { render(); return; } ca.people.splice(Number(i), 1); }
+    await saveCA(ca, "Change roles updated");
+  }
+});
+
 /* ---------- reports ---------- */
 const RP_PERIODS = [["7d", "Last 7 days"], ["30d", "Last 30 days"], ["90d", "Last 90 days"], ["month", "This month"], ["lastmonth", "Last month"], ["quarter", "This quarter"], ["year", "This year"], ["custom", "Custom range"]];
 const RP_TABS = [["overview", "Overview"], ["sla", "SLA performance"], ["agents", "Agent performance"], ["csat", "Customer satisfaction"], ["breakdown", "Breakdown"]];
@@ -1196,7 +1483,8 @@ async function boot() {
   pca.setActiveAccount(account);
   try { S.user = await api("GET", "/me"); } catch (e) { fatal("We couldn’t confirm your sign-in. Reload the page to try again."); return; }
   const h = (location.hash || "").slice(1);
-  if (["dashboard", "contacts", "portal", "settings", "reports"].includes(h)) S.page = h;
+  if (["dashboard", "contacts", "portal", "settings", "reports", "changes"].includes(h)) S.page = h;
+  if (!S.user.isAgent && h === "changes") S.ptab = "changes";
   if (VIEWS.some(v => v[0] === h)) { S.page = "tickets"; S.view = h; }
   if (!S.user.isAgent && (h === "portal" || h === "mine")) S.ptab = "mine";
   render();
@@ -1204,11 +1492,13 @@ async function boot() {
     if (S.user.isAgent) { await loadAgent(); if (S.page === "portal") await loadMine(); }
     else { const s = await api("GET", "/settings"); S.settings = { ...S.settings, ...s }; await loadMine(); }
   } catch (e) { S.loadError = e.message || "Something went wrong."; }
+  await loadChangeMe(); if (S.cm.me.perms.any) await loadChanges();
   render();
   setInterval(async () => {
     if (document.hidden) return;
     try {
       if (S.user.isAgent) { await loadAgent(); if (S.page === "dashboard") S.recentFb = await api("GET", "/feedback/recent"); if (S.page === "reports") S.allFb = await api("GET", "/feedback/all"); if (S.selected) S.details[S.selected] = await api("GET", "/tickets/" + S.selected); }
+      if (S.cm && S.cm.me && S.cm.me.perms.any && !(S.cm.edit)) { await loadChanges(); if (S.cm.sel && (S.page === "changes" || S.ptab === "changes")) await loadChange(S.cm.sel); }
       if (!S.user.isAgent || S.page === "portal") { await loadMine(); if (S.psel) S.myDetails[S.psel] = await api("GET", "/tickets/" + S.psel); }
       const a = document.activeElement;
       if (!(a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT" || a.tagName === "SELECT")) && !dlgNew.open) render();
