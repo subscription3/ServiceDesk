@@ -1,0 +1,29 @@
+name: Set up SharePoint
+
+# Creates any missing SharePoint lists and columns the service desk needs.
+# Safe to run as often as you like: it only adds what's missing and never deletes anything.
+# Run it after uploading a new version of the service desk.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - name: Create missing lists and columns
+        run: node scripts/setup-sharepoint.mjs
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_HOSTNAME: ${{ secrets.SHAREPOINT_HOSTNAME }}
+          SHAREPOINT_SITE_PATH: ${{ secrets.SHAREPOINT_SITE_PATH }}

@@ -1,0 +1,62 @@
+name: Restore test
+
+# Proves backups can be restored, as auditors usually ask. Restores a backup into a separate, empty test site.
+on:
+  workflow_dispatch:
+    inputs:
+      backup:
+        description: "Backup ID to restore (e.g. 20261028-0100Z), or latest"
+        required: true
+        default: latest
+      target_site_path:
+        description: "Empty test SharePoint site to restore into (e.g. /sites/ServiceDesk-RestoreTest). Never the live site."
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      SHAREPOINT_HOSTNAME: ${{ secrets.SHAREPOINT_HOSTNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - name: Refuse to restore over the live site
+        run: |
+          if [ "$TARGET" = "$LIVE" ] || [ "$TARGET" = "$LIVE/" ]; then
+            echo "The target is the live site. Choose a separate, empty test site."; exit 1
+          fi
+        env:
+          TARGET: ${{ inputs.target_site_path }}
+          LIVE: ${{ secrets.SHAREPOINT_SITE_PATH }}
+      - name: Download the backup from the live site
+        id: dl
+        run: node scripts/download-backup.mjs "$BACKUP_ID"
+        env:
+          BACKUP_ID: ${{ inputs.backup }}
+          SHAREPOINT_SITE_PATH: ${{ secrets.SHAREPOINT_SITE_PATH }}
+      - name: Create the lists on the test site
+        run: node scripts/setup-sharepoint.mjs
+        env:
+          SHAREPOINT_SITE_PATH: ${{ inputs.target_site_path }}
+      - name: Restore and verify
+        run: node scripts/restore.mjs "$BACKUP_DIR"
+        env:
+          BACKUP_DIR: ${{ steps.dl.outputs.dir }}
+          SHAREPOINT_SITE_PATH: ${{ inputs.target_site_path }}
+      - name: Keep the restore report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-test-${{ github.run_number }}
+          path: restore-input/**/restore-report.json
+          if-no-files-found: ignore
